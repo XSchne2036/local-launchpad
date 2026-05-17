@@ -7,7 +7,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from . import ai, renderer, scraper, storage
+from pydantic import BaseModel, EmailStr
+
+from . import ai, renderer, scraper, storage, tunnels
 
 app = FastAPI(title="LocalLift Backend", version="0.2.0")
 
