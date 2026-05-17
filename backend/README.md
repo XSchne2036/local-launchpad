@@ -1,6 +1,7 @@
 # LocalLift Backend
 
-Python FastAPI Backend. Storage = JSON-Dateien in `data/`. Kein DB-Setup nötig.
+Python FastAPI Backend. Storage = JSON-Dateien in `data/`. Kein DB-Setup.
+AI-Generation via **Lovable AI Gateway** (kein extra OpenAI-Key nötig).
 
 ## Setup
 
@@ -10,34 +11,42 @@ python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-# trage deinen GOOGLE_PLACES_API_KEY ein
+# eintragen: GOOGLE_PLACES_API_KEY + LOVABLE_API_KEY
 ```
 
-**Google API Key** holen:
-1. https://console.cloud.google.com/ → neues Projekt
-2. APIs & Services → Library → **"Places API (New)"** aktivieren
-3. Credentials → API Key erstellen → in `.env` einfügen
+**Google Places Key**: https://console.cloud.google.com → "Places API (New)" aktivieren → API Key.
+**Lovable API Key**: Lovable Workspace → Settings → API Keys.
 
-## Starten
+## Starten (Port 8002, im LAN erreichbar)
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 ```
 
-→ http://localhost:8000/docs  (Swagger UI)
+- Lokal:    http://localhost:8002
+- Netzwerk: http://<deine-ip>:8002
+- Docs:     http://localhost:8002/docs
 
-## Scraper testen
+## Workflow
 
 ```bash
-curl -X POST "http://localhost:8000/scraper/run?query=Friseur%20in%20Berlin%20Mitte&region=DE"
+# 1. Leads scrapen (ohne Website)
+curl -X POST "http://localhost:8002/scraper/run?query=Friseur%20in%20Berlin%20Mitte&region=DE"
+
+# 2. Webseite für ein Lead generieren
+curl -X POST "http://localhost:8002/sites/generate/<LEAD_ID>?language=de"
+
+# 3. Bulk: 5 nächste Leads
+curl -X POST "http://localhost:8002/sites/generate-batch?limit=5&language=de"
+
+# 4. Übersicht
+open http://localhost:8002/
 ```
 
-Ergebnis landet in `data/leads.json`. Nur Einträge ohne Website werden gespeichert.
-
-## Cloudflare Tunnel (für Kunden-Hosting)
+## Cloudflare Tunnel (Kunden-Hosting)
 
 ```bash
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://localhost:8002
 ```
 
-→ liefert eine `*.trycloudflare.com` URL die du dem Kunden gibst.
+→ liefert `*.trycloudflare.com` URL für den Kunden.
