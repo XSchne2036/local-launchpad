@@ -44,22 +44,22 @@ function Nav() {
   return (
     <header className="fixed top-0 inset-x-0 z-50 backdrop-blur-xl bg-background/60 border-b border-border">
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-        <a href="#" className="flex items-center gap-2 font-display font-bold text-lg">
+        <a href="#top" onClick={scrollTo("top")} className="flex items-center gap-2 font-display font-bold text-lg">
           <span className="size-7 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
             <MapPin className="size-4 text-primary-foreground" />
           </span>
           LocalLift
         </a>
         <nav className="hidden md:flex items-center gap-8 text-sm text-muted-foreground">
-          <a href="#how" className="hover:text-foreground transition">So funktioniert's</a>
-          <a href="#features" className="hover:text-foreground transition">Features</a>
-          <a href="#pricing" className="hover:text-foreground transition">Preise</a>
-          <a href="#languages" className="hover:text-foreground transition">Sprachen</a>
+          <a href="#how" onClick={scrollTo("how")} className="hover:text-foreground transition">So funktioniert's</a>
+          <a href="#features" onClick={scrollTo("features")} className="hover:text-foreground transition">Features</a>
+          <a href="#pricing" onClick={scrollTo("pricing")} className="hover:text-foreground transition">Preise</a>
+          <a href="#languages" onClick={scrollTo("languages")} className="hover:text-foreground transition">Sprachen</a>
         </nav>
         <div className="flex items-center gap-3">
-          <button className="text-sm text-muted-foreground hover:text-foreground transition hidden sm:block">Login</button>
-          <button className="bg-gradient-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium shadow-glow hover:scale-105 transition">
-            Demo ansehen
+          <button onClick={openBackend("/")} className="text-sm text-muted-foreground hover:text-foreground transition hidden sm:block">Login</button>
+          <button onClick={openBackend("/")} className="bg-gradient-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium shadow-glow hover:scale-105 transition">
+            Admin öffnen
           </button>
         </div>
       </div>
