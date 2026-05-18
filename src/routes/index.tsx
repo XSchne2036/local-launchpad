@@ -281,7 +281,7 @@ function Pricing() {
                 <li key={x} className="flex gap-2"><Check className="size-4 text-accent shrink-0 mt-0.5" />{x}</li>
               ))}
             </ul>
-            <button className="w-full py-3 rounded-xl border border-border hover:bg-secondary transition">Kostenlos starten</button>
+            <button onClick={openBackend("/")} className="w-full py-3 rounded-xl border border-border hover:bg-secondary transition">Kostenlos starten</button>
           </div>
           <div className="p-8 rounded-2xl border-2 border-primary/60 bg-card shadow-glow relative">
             <div className="absolute -top-3 right-6 px-3 py-1 rounded-full bg-gradient-primary text-primary-foreground text-xs font-medium">Empfohlen</div>
@@ -293,7 +293,7 @@ function Pricing() {
                 <li key={x} className="flex gap-2"><Check className="size-4 text-accent shrink-0 mt-0.5" />{x}</li>
               ))}
             </ul>
-            <button className="w-full py-3 rounded-xl bg-gradient-primary text-primary-foreground font-medium shadow-glow hover:scale-105 transition">Pro freischalten</button>
+            <a href="mailto:hello@locallift.io?subject=Pro%20freischalten" className="block text-center w-full py-3 rounded-xl bg-gradient-primary text-primary-foreground font-medium shadow-glow hover:scale-105 transition">Pro freischalten</a>
           </div>
         </div>
       </div>
