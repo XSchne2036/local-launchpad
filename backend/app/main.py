@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from pydantic import BaseModel, EmailStr
 
-from . import ai, renderer, scraper, storage, tunnels
+from . import ai, renderer, scraper, storage, themes, tunnels
 
 app = FastAPI(title="LocalLift Backend", version="0.2.0")
 
@@ -80,27 +80,32 @@ def generate_site(
     lead_id: str,
     language: str = Query("de"),
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
+    theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
     """Generiert (oder regeneriert) eine Webseite für ein Lead per Lovable AI."""
     lead = _find_lead(lead_id)
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
-        return {"status": "exists", "site": existing}
+        return {"status": "exists", "site": {k: v for k, v in existing.items() if k != "html"}}
+
+    chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
 
     try:
-        content = ai.generate_content(lead, language=language)
+        content = ai.generate_content(lead, language=language, theme=chosen_theme)
     except ai.AIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
     slug = ai.slugify(lead.get("name") or lead_id) + "-" + lead_id[-6:].lower()
-    html_doc = renderer.render_site(lead, content, slug)
+    html_doc = renderer.render_site(lead, content, slug, theme=chosen_theme)
 
     site = {
         "id": slug,
         "lead_id": lead_id,
         "slug": slug,
         "language": language,
+        "theme": chosen_theme["key"],
+        "theme_name": chosen_theme["name"],
         "content": content,
         "html": html_doc,
         "status": "generated",
@@ -111,6 +116,14 @@ def generate_site(
     saved = storage.upsert("sites", site)
     storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
     return {"status": "ok", "site": {k: v for k, v in saved.items() if k != "html"}}
+
+
+@app.get("/themes")
+def list_themes_endpoint() -> dict:
+    return {"themes": [
+        {k: v for k, v in t.items() if k in ("key", "name", "tone", "primary", "accent", "hero_style", "badge_emoji")}
+        for t in themes.list_themes()
+    ]}
 
 
 @app.post("/sites/generate-batch")
@@ -293,8 +306,12 @@ def index() -> HTMLResponse:
             else f'<button onclick="start(\'{s["slug"]}\')">Tunnel starten</button>'
         )
         claimed = "✅" if s.get("claimed") else ("⏳" if s.get("claim_status") == "pending" else "—")
+        theme_key = s.get("theme", "default")
+        theme_obj = themes.get_theme(theme_key)
+        theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
         rows += f"""<tr>
           <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
+          <td>{theme_cell}</td>
           <td>{s.get('language','')}</td>
           <td>{claimed}</td>
           <td>{pub}</td>
@@ -302,7 +319,7 @@ def index() -> HTMLResponse:
         </tr>"""
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
-<style>body{{font:15px system-ui;max-width:1100px;margin:30px auto;padding:0 20px;color:#0f172a}}
+<style>body{{font:15px system-ui;max-width:1180px;margin:30px auto;padding:0 20px;color:#0f172a}}
 h1{{margin-bottom:4px}} .stats{{display:flex;gap:20px;margin:20px 0;color:#64748b}}
 .stats div b{{display:block;font-size:1.8rem;color:#1e40af}}
 table{{width:100%;border-collapse:collapse;margin-top:20px}}
@@ -320,9 +337,9 @@ a{{color:#1e40af}}
   <div><b>{len(claims)}</b>Claim-Anfragen</div>
 </div>
 {'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
-<table><thead><tr><th>Site</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
-<tbody>{rows or '<tr><td colspan=5 style="text-align:center;color:#94a3b8;padding:40px">Noch keine Seiten. Starte über <a href="/docs">/docs</a>.</td></tr>'}</tbody></table>
-<p style="margin-top:30px"><a href="/docs">→ API Docs</a> · <a href="/claims">→ Claims JSON</a></p>
+<table><thead><tr><th>Site</th><th>Theme</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
+<tbody>{rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:40px">Noch keine Seiten. Starte über <a href="/docs">/docs</a>.</td></tr>'}</tbody></table>
+<p style="margin-top:30px"><a href="/docs">→ API Docs</a> · <a href="/themes">→ Themes JSON</a> · <a href="/claims">→ Claims JSON</a></p>
 <script>
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{alert((await r.json()).detail)}} else location.reload(); }}
 async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
