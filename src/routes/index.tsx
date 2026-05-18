@@ -5,6 +5,15 @@ import {
   Bot, LineChart, Lock, ArrowRight, Check, Star, Zap,
 } from "lucide-react";
 
+const BACKEND_URL =
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "http://localhost:8002";
+
+const scrollTo = (id: string) => (e: React.MouseEvent) => {
+  e.preventDefault();
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+};
+const openBackend = (path = "/") => () => window.open(BACKEND_URL + path, "_blank", "noopener");
+
 export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
@@ -17,7 +26,7 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
+    <div id="top" className="min-h-screen bg-background text-foreground overflow-x-hidden">
       <Nav />
       <Hero />
       <LogosStrip />
@@ -35,22 +44,22 @@ function Nav() {
   return (
     <header className="fixed top-0 inset-x-0 z-50 backdrop-blur-xl bg-background/60 border-b border-border">
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-        <a href="#" className="flex items-center gap-2 font-display font-bold text-lg">
+        <a href="#top" onClick={scrollTo("top")} className="flex items-center gap-2 font-display font-bold text-lg">
           <span className="size-7 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
             <MapPin className="size-4 text-primary-foreground" />
           </span>
           LocalLift
         </a>
         <nav className="hidden md:flex items-center gap-8 text-sm text-muted-foreground">
-          <a href="#how" className="hover:text-foreground transition">So funktioniert's</a>
-          <a href="#features" className="hover:text-foreground transition">Features</a>
-          <a href="#pricing" className="hover:text-foreground transition">Preise</a>
-          <a href="#languages" className="hover:text-foreground transition">Sprachen</a>
+          <a href="#how" onClick={scrollTo("how")} className="hover:text-foreground transition">So funktioniert's</a>
+          <a href="#features" onClick={scrollTo("features")} className="hover:text-foreground transition">Features</a>
+          <a href="#pricing" onClick={scrollTo("pricing")} className="hover:text-foreground transition">Preise</a>
+          <a href="#languages" onClick={scrollTo("languages")} className="hover:text-foreground transition">Sprachen</a>
         </nav>
         <div className="flex items-center gap-3">
-          <button className="text-sm text-muted-foreground hover:text-foreground transition hidden sm:block">Login</button>
-          <button className="bg-gradient-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium shadow-glow hover:scale-105 transition">
-            Demo ansehen
+          <button onClick={openBackend("/")} className="text-sm text-muted-foreground hover:text-foreground transition hidden sm:block">Login</button>
+          <button onClick={openBackend("/")} className="bg-gradient-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium shadow-glow hover:scale-105 transition">
+            Admin öffnen
           </button>
         </div>
       </div>
@@ -85,10 +94,10 @@ function Hero() {
           erstellen automatisch moderne, SEO-optimierte Landingpages — bereit zum Claimen.
         </p>
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-          <button className="group bg-gradient-primary text-primary-foreground px-6 py-3 rounded-xl font-medium shadow-glow hover:scale-105 transition flex items-center gap-2">
+          <button onClick={openBackend("/")} className="group bg-gradient-primary text-primary-foreground px-6 py-3 rounded-xl font-medium shadow-glow hover:scale-105 transition flex items-center gap-2">
             Jetzt starten <ArrowRight className="size-4 group-hover:translate-x-1 transition" />
           </button>
-          <button className="px-6 py-3 rounded-xl font-medium border border-border bg-card/40 backdrop-blur hover:bg-card transition">
+          <button onClick={openBackend("/sites")} className="px-6 py-3 rounded-xl font-medium border border-border bg-card/40 backdrop-blur hover:bg-card transition">
             Beispielseite ansehen
           </button>
         </div>
@@ -272,7 +281,7 @@ function Pricing() {
                 <li key={x} className="flex gap-2"><Check className="size-4 text-accent shrink-0 mt-0.5" />{x}</li>
               ))}
             </ul>
-            <button className="w-full py-3 rounded-xl border border-border hover:bg-secondary transition">Kostenlos starten</button>
+            <button onClick={openBackend("/")} className="w-full py-3 rounded-xl border border-border hover:bg-secondary transition">Kostenlos starten</button>
           </div>
           <div className="p-8 rounded-2xl border-2 border-primary/60 bg-card shadow-glow relative">
             <div className="absolute -top-3 right-6 px-3 py-1 rounded-full bg-gradient-primary text-primary-foreground text-xs font-medium">Empfohlen</div>
@@ -284,7 +293,7 @@ function Pricing() {
                 <li key={x} className="flex gap-2"><Check className="size-4 text-accent shrink-0 mt-0.5" />{x}</li>
               ))}
             </ul>
-            <button className="w-full py-3 rounded-xl bg-gradient-primary text-primary-foreground font-medium shadow-glow hover:scale-105 transition">Pro freischalten</button>
+            <a href="mailto:hello@locallift.io?subject=Pro%20freischalten" className="block text-center w-full py-3 rounded-xl bg-gradient-primary text-primary-foreground font-medium shadow-glow hover:scale-105 transition">Pro freischalten</a>
           </div>
         </div>
       </div>
@@ -305,7 +314,7 @@ function CTA() {
           <p className="text-muted-foreground text-lg mb-8 max-w-xl mx-auto">
             Starte den ersten automatischen Scan und sieh in 60 Sekunden die ersten generierten Seiten.
           </p>
-          <button className="bg-gradient-primary text-primary-foreground px-8 py-4 rounded-xl font-medium shadow-glow hover:scale-105 transition inline-flex items-center gap-2">
+          <button onClick={openBackend("/")} className="bg-gradient-primary text-primary-foreground px-8 py-4 rounded-xl font-medium shadow-glow hover:scale-105 transition inline-flex items-center gap-2">
             Demo starten <ArrowRight className="size-4" />
           </button>
         </div>
@@ -326,9 +335,9 @@ function Footer() {
           <span>© 2026</span>
         </div>
         <div className="flex gap-6">
-          <a href="#" className="hover:text-foreground transition">Impressum</a>
-          <a href="#" className="hover:text-foreground transition">Datenschutz</a>
-          <a href="#" className="hover:text-foreground transition">AGB</a>
+          <a href="/impressum" className="hover:text-foreground transition">Impressum</a>
+          <a href="/datenschutz" className="hover:text-foreground transition">Datenschutz</a>
+          <a href="/agb" className="hover:text-foreground transition">AGB</a>
         </div>
       </div>
     </footer>
