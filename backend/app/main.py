@@ -80,27 +80,32 @@ def generate_site(
     lead_id: str,
     language: str = Query("de"),
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
+    theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
     """Generiert (oder regeneriert) eine Webseite für ein Lead per Lovable AI."""
     lead = _find_lead(lead_id)
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
-        return {"status": "exists", "site": existing}
+        return {"status": "exists", "site": {k: v for k, v in existing.items() if k != "html"}}
+
+    chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
 
     try:
-        content = ai.generate_content(lead, language=language)
+        content = ai.generate_content(lead, language=language, theme=chosen_theme)
     except ai.AIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
     slug = ai.slugify(lead.get("name") or lead_id) + "-" + lead_id[-6:].lower()
-    html_doc = renderer.render_site(lead, content, slug)
+    html_doc = renderer.render_site(lead, content, slug, theme=chosen_theme)
 
     site = {
         "id": slug,
         "lead_id": lead_id,
         "slug": slug,
         "language": language,
+        "theme": chosen_theme["key"],
+        "theme_name": chosen_theme["name"],
         "content": content,
         "html": html_doc,
         "status": "generated",
@@ -111,6 +116,14 @@ def generate_site(
     saved = storage.upsert("sites", site)
     storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
     return {"status": "ok", "site": {k: v for k, v in saved.items() if k != "html"}}
+
+
+@app.get("/themes")
+def list_themes_endpoint() -> dict:
+    return {"themes": [
+        {k: v for k, v in t.items() if k in ("key", "name", "tone", "primary", "accent", "hero_style", "badge_emoji")}
+        for t in themes.list_themes()
+    ]}
 
 
 @app.post("/sites/generate-batch")
