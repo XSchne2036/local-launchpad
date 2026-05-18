@@ -314,7 +314,7 @@ function CTA() {
           <p className="text-muted-foreground text-lg mb-8 max-w-xl mx-auto">
             Starte den ersten automatischen Scan und sieh in 60 Sekunden die ersten generierten Seiten.
           </p>
-          <button className="bg-gradient-primary text-primary-foreground px-8 py-4 rounded-xl font-medium shadow-glow hover:scale-105 transition inline-flex items-center gap-2">
+          <button onClick={openBackend("/")} className="bg-gradient-primary text-primary-foreground px-8 py-4 rounded-xl font-medium shadow-glow hover:scale-105 transition inline-flex items-center gap-2">
             Demo starten <ArrowRight className="size-4" />
           </button>
         </div>
@@ -335,9 +335,9 @@ function Footer() {
           <span>© 2026</span>
         </div>
         <div className="flex gap-6">
-          <a href="#" className="hover:text-foreground transition">Impressum</a>
-          <a href="#" className="hover:text-foreground transition">Datenschutz</a>
-          <a href="#" className="hover:text-foreground transition">AGB</a>
+          <a href="/impressum" className="hover:text-foreground transition">Impressum</a>
+          <a href="/datenschutz" className="hover:text-foreground transition">Datenschutz</a>
+          <a href="/agb" className="hover:text-foreground transition">AGB</a>
         </div>
       </div>
     </footer>
