@@ -306,8 +306,12 @@ def index() -> HTMLResponse:
             else f'<button onclick="start(\'{s["slug"]}\')">Tunnel starten</button>'
         )
         claimed = "✅" if s.get("claimed") else ("⏳" if s.get("claim_status") == "pending" else "—")
+        theme_key = s.get("theme", "default")
+        theme_obj = themes.get_theme(theme_key)
+        theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
         rows += f"""<tr>
           <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
+          <td>{theme_cell}</td>
           <td>{s.get('language','')}</td>
           <td>{claimed}</td>
           <td>{pub}</td>
@@ -315,7 +319,7 @@ def index() -> HTMLResponse:
         </tr>"""
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
-<style>body{{font:15px system-ui;max-width:1100px;margin:30px auto;padding:0 20px;color:#0f172a}}
+<style>body{{font:15px system-ui;max-width:1180px;margin:30px auto;padding:0 20px;color:#0f172a}}
 h1{{margin-bottom:4px}} .stats{{display:flex;gap:20px;margin:20px 0;color:#64748b}}
 .stats div b{{display:block;font-size:1.8rem;color:#1e40af}}
 table{{width:100%;border-collapse:collapse;margin-top:20px}}
@@ -333,9 +337,9 @@ a{{color:#1e40af}}
   <div><b>{len(claims)}</b>Claim-Anfragen</div>
 </div>
 {'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
-<table><thead><tr><th>Site</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
-<tbody>{rows or '<tr><td colspan=5 style="text-align:center;color:#94a3b8;padding:40px">Noch keine Seiten. Starte über <a href="/docs">/docs</a>.</td></tr>'}</tbody></table>
-<p style="margin-top:30px"><a href="/docs">→ API Docs</a> · <a href="/claims">→ Claims JSON</a></p>
+<table><thead><tr><th>Site</th><th>Theme</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
+<tbody>{rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:40px">Noch keine Seiten. Starte über <a href="/docs">/docs</a>.</td></tr>'}</tbody></table>
+<p style="margin-top:30px"><a href="/docs">→ API Docs</a> · <a href="/themes">→ Themes JSON</a> · <a href="/claims">→ Claims JSON</a></p>
 <script>
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{alert((await r.json()).detail)}} else location.reload(); }}
 async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
