@@ -5,6 +5,15 @@ import {
   Bot, LineChart, Lock, ArrowRight, Check, Star, Zap,
 } from "lucide-react";
 
+const BACKEND_URL =
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "http://localhost:8002";
+
+const scrollTo = (id: string) => (e: React.MouseEvent) => {
+  e.preventDefault();
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+};
+const openBackend = (path = "/") => () => window.open(BACKEND_URL + path, "_blank", "noopener");
+
 export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
