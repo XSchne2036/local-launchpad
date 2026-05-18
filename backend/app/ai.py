@@ -80,18 +80,28 @@ def slugify(text: str) -> str:
     return s.strip("-")[:60] or "site"
 
 
-def generate_content(lead: dict[str, Any], language: str = "de", model: str = DEFAULT_MODEL) -> dict[str, Any]:
+def generate_content(
+    lead: dict[str, Any],
+    language: str = "de",
+    model: str = DEFAULT_MODEL,
+    theme: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Generiert Webseiten-Inhalt für ein Lead via Lovable AI Gateway (Tool-Calling für Struktur)."""
+    from . import themes as _themes
+    theme = theme or _themes.detect_theme(lead)
     business_type = lead.get("primary_type") or "local business"
+
     sys_prompt = (
         f"Du erstellst hochwertige, lokal optimierte Webseiten-Inhalte in der Sprache '{language}'. "
-        "Sei konkret, vertrauenswürdig und vermeide generische Floskeln. "
-        "Wähle Farben passend zur Branche (z.B. Restaurants warm, Friseure elegant, Handwerk solide)."
+        f"Die Branche ist '{theme['name']}'. Schreibe im Ton: {theme['tone']}. "
+        f"Sei konkret, vertrauenswürdig, vermeide generische Floskeln. "
+        f"Empfohlene Farbpalette (kann übernommen werden): primary={theme['primary']}, accent={theme['accent']}. "
+        f"Wähle nur dann andere Farben, wenn sie eindeutig besser zum Unternehmen passen."
     )
     user_prompt = (
         f"Erstelle den Inhalt für die Webseite folgenden Unternehmens:\n\n"
         f"Name: {lead.get('name')}\n"
-        f"Branche: {business_type}\n"
+        f"Branche: {business_type} (Theme: {theme['name']})\n"
         f"Adresse: {lead.get('address')}\n"
         f"Telefon: {lead.get('phone') or 'unbekannt'}\n"
         f"Google Bewertung: {lead.get('rating')} ({lead.get('rating_count')} Reviews)\n"
