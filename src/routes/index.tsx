@@ -26,7 +26,7 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
+    <div id="top" className="min-h-screen bg-background text-foreground overflow-x-hidden">
       <Nav />
       <Hero />
       <LogosStrip />
