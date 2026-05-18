@@ -94,10 +94,10 @@ function Hero() {
           erstellen automatisch moderne, SEO-optimierte Landingpages — bereit zum Claimen.
         </p>
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-          <button className="group bg-gradient-primary text-primary-foreground px-6 py-3 rounded-xl font-medium shadow-glow hover:scale-105 transition flex items-center gap-2">
+          <button onClick={openBackend("/")} className="group bg-gradient-primary text-primary-foreground px-6 py-3 rounded-xl font-medium shadow-glow hover:scale-105 transition flex items-center gap-2">
             Jetzt starten <ArrowRight className="size-4 group-hover:translate-x-1 transition" />
           </button>
-          <button className="px-6 py-3 rounded-xl font-medium border border-border bg-card/40 backdrop-blur hover:bg-card transition">
+          <button onClick={openBackend("/sites")} className="px-6 py-3 rounded-xl font-medium border border-border bg-card/40 backdrop-blur hover:bg-card transition">
             Beispielseite ansehen
           </button>
         </div>
