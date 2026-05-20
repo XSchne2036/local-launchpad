@@ -178,9 +178,10 @@ def list_themes_endpoint() -> dict:
 @app.post("/sites/generate-batch")
 def generate_batch(
     limit: int = Query(5, ge=1, le=50),
-    language: str = Query("de"),
+    language: str = Query("auto", description="'auto' = pro Lead aus Region erkennen"),
+    translate_to: str | None = Query(None, description="Komma-getrennt: nach Generierung in diese Sprachen übersetzen"),
 ):
-    """Generiert Webseiten für die nächsten N Leads ohne Site."""
+    """Generiert Webseiten für die nächsten N Leads ohne Site. Optional: Auto-Übersetzungen."""
     leads = storage.load("leads")
     generated_slugs = {s.get("lead_id") for s in storage.load("sites")}
     todo = [l for l in leads if l.get("id") not in generated_slugs][:limit]
@@ -189,7 +190,15 @@ def generate_batch(
     for lead in todo:
         try:
             r = generate_site(lead["id"], language=language, force=False)
-            results.append({"lead_id": lead["id"], "status": "ok", "slug": r["site"]["slug"]})
+            slug = r["site"]["slug"]
+            row = {"lead_id": lead["id"], "status": "ok", "slug": slug, "language": r["site"].get("language")}
+            if translate_to:
+                try:
+                    tr = translate_site(slug, languages=translate_to)
+                    row["translated"] = tr.get("added", [])
+                except HTTPException as te:
+                    row["translation_error"] = te.detail
+            results.append(row)
         except HTTPException as e:
             results.append({"lead_id": lead["id"], "status": "error", "detail": e.detail})
     return {"processed": len(results), "results": results}
@@ -198,16 +207,28 @@ def generate_batch(
 @app.get("/sites")
 def list_sites() -> dict:
     sites = storage.load("sites")
+    public_fields = lambda s: {k: v for k, v in s.items() if k not in ("html", "translations_html")}
     return {
         "count": len(sites),
-        "sites": [{k: v for k, v in s.items() if k != "html"} for s in sites],
+        "sites": [
+            {
+                **public_fields(s),
+                "available_languages": [s.get("language")] + list((s.get("translations") or {}).keys()),
+            }
+            for s in sites
+        ],
     }
 
 
 @app.get("/sites/{slug}", response_class=HTMLResponse)
-def view_site(slug: str) -> HTMLResponse:
+def view_site(slug: str, lang: str | None = Query(None, description="Optional: en/id/de für Übersetzung")) -> HTMLResponse:
     for s in storage.load("sites"):
         if s.get("slug") == slug:
+            if lang and lang != s.get("language"):
+                tr_html = (s.get("translations_html") or {}).get(lang)
+                if tr_html:
+                    return HTMLResponse(content=tr_html)
+                raise HTTPException(404, f"Übersetzung '{lang}' nicht vorhanden. Erst /sites/{slug}/translate?languages={lang} aufrufen.")
             return HTMLResponse(content=s["html"])
     raise HTTPException(status_code=404, detail="Site nicht gefunden")
 
