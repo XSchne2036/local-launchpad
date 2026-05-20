@@ -295,8 +295,9 @@ def index() -> HTMLResponse:
     leads = storage.load("leads")
     claims = storage.load("claims")
     tun = {t["slug"]: t for t in tunnels.list_tunnels()}
+    sites_by_lead = {s.get("lead_id"): s for s in sites}
 
-    rows = ""
+    site_rows = ""
     for s in sites:
         t = tun.get(s["slug"])
         pub = f'<a href="{t["public_url"]}" target="_blank">{t["tunnel_host"]}</a>' if t and t["status"] == "running" else '<span style="color:#94a3b8">–</span>'
@@ -309,7 +310,7 @@ def index() -> HTMLResponse:
         theme_key = s.get("theme", "default")
         theme_obj = themes.get_theme(theme_key)
         theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
-        rows += f"""<tr>
+        site_rows += f"""<tr>
           <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
           <td>{theme_cell}</td>
           <td>{s.get('language','')}</td>
@@ -318,16 +319,49 @@ def index() -> HTMLResponse:
           <td>{action}</td>
         </tr>"""
 
+    # Lead-Tabelle (neueste zuerst, max 30)
+    leads_sorted = sorted(leads, key=lambda l: l.get("discovered_at", ""), reverse=True)[:30]
+    lead_rows = ""
+    for l in leads_sorted:
+        has_site = l["id"] in sites_by_lead
+        if has_site:
+            site = sites_by_lead[l["id"]]
+            site_cell = f'<a href="/sites/{site["slug"]}" target="_blank">✅ ansehen</a>'
+            gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
+        else:
+            site_cell = '<span style="color:#94a3b8">–</span>'
+            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Seite generieren</button>'
+        phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
+        rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
+        lead_rows += f"""<tr>
+          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small></td>
+          <td><small>{l.get('primary_type','') or ''}</small></td>
+          <td>{phone}</td>
+          <td>{rating}</td>
+          <td>{site_cell}</td>
+          <td>{gen_btn}</td>
+        </tr>"""
+
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
 <style>body{{font:15px system-ui;max-width:1180px;margin:30px auto;padding:0 20px;color:#0f172a}}
-h1{{margin-bottom:4px}} .stats{{display:flex;gap:20px;margin:20px 0;color:#64748b}}
+h1{{margin-bottom:4px}} h2{{margin-top:40px;font-size:1.2rem;color:#1e293b}}
+.stats{{display:flex;gap:20px;margin:20px 0;color:#64748b}}
 .stats div b{{display:block;font-size:1.8rem;color:#1e40af}}
-table{{width:100%;border-collapse:collapse;margin-top:20px}}
-th,td{{text-align:left;padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:top}}
-th{{background:#f8fafc;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:#64748b}}
-button{{background:#1e40af;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:600}}
+table{{width:100%;border-collapse:collapse;margin-top:12px}}
+th,td{{text-align:left;padding:10px;border-bottom:1px solid #e2e8f0;vertical-align:top;font-size:.92rem}}
+th{{background:#f8fafc;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:#64748b}}
+button{{background:#1e40af;color:#fff;border:0;padding:7px 12px;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85rem}}
+button.ghost{{background:#f1f5f9;color:#1e40af}}
+button:disabled{{opacity:.5;cursor:wait}}
 a{{color:#1e40af}}
 .warn{{background:#fef3c7;color:#92400e;padding:12px;border-radius:10px;margin:12px 0}}
+.card{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px;margin-top:14px}}
+.row{{display:flex;gap:10px;flex-wrap:wrap;align-items:end}}
+.row label{{display:flex;flex-direction:column;font-size:.78rem;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;gap:4px}}
+.row input,.row select{{padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;min-width:120px}}
+.row input.wide{{min-width:340px}}
+#status{{margin-top:10px;font-size:.9rem;color:#64748b;min-height:20px}}
+#status.err{{color:#b91c1c}} #status.ok{{color:#15803d}}
 </style></head><body>
 <h1>LocalLift – Admin</h1>
 <div class="stats">
@@ -337,11 +371,96 @@ a{{color:#1e40af}}
   <div><b>{len(claims)}</b>Claim-Anfragen</div>
 </div>
 {'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
+
+<h2>🔎 Scraper – Leads finden</h2>
+<div class="card">
+  <div class="row">
+    <label>Suchbegriff<input id="q" class="wide" placeholder="z.B. Friseur in Berlin Mitte" value=""></label>
+    <label>Sprache
+      <select id="lang">
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+        <option value="id">Bahasa Indonesia</option>
+      </select>
+    </label>
+    <label>Region
+      <select id="region">
+        <option value="">Auto</option>
+        <option value="DE">DE</option>
+        <option value="AT">AT</option>
+        <option value="CH">CH</option>
+        <option value="ID">ID</option>
+        <option value="US">US</option>
+      </select>
+    </label>
+    <label>Seiten<input id="pages" type="number" min="1" max="5" value="2" style="min-width:70px"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
+      <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
+    </label>
+    <button id="runBtn" onclick="runScraper()">Scrapen</button>
+    <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<h2>📋 Letzte Leads ({len(leads_sorted)} von {len(leads)})</h2>
+<table><thead><tr><th>Unternehmen</th><th>Branche</th><th>Telefon</th><th>Bewertung</th><th>Site</th><th>Aktion</th></tr></thead>
+<tbody>{lead_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Leads. Scraper oben starten.</td></tr>'}</tbody></table>
+
+<h2>🌐 Generierte Sites</h2>
 <table><thead><tr><th>Site</th><th>Theme</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
-<tbody>{rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:40px">Noch keine Seiten. Starte über <a href="/docs">/docs</a>.</td></tr>'}</tbody></table>
-<p style="margin-top:30px"><a href="/docs">→ API Docs</a> · <a href="/themes">→ Themes JSON</a> · <a href="/claims">→ Claims JSON</a></p>
+<tbody>{site_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Seiten generiert.</td></tr>'}</tbody></table>
+
+<p style="margin-top:30px;color:#64748b;font-size:.9rem">
+  <a href="/docs">→ API Docs</a> · <a href="/themes">→ Themes JSON</a> · <a href="/leads">→ Leads JSON</a> · <a href="/claims">→ Claims JSON</a>
+</p>
+
 <script>
-async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{alert((await r.json()).detail)}} else location.reload(); }}
+const s = document.getElementById('status');
+function setStatus(msg, cls){{ s.className = cls||''; s.textContent = msg; }}
+
+async function runScraper(){{
+  const q = document.getElementById('q').value.trim();
+  if(!q){{ setStatus('Bitte Suchbegriff eingeben.', 'err'); return; }}
+  const params = new URLSearchParams({{
+    query: q,
+    language: document.getElementById('lang').value,
+    max_pages: document.getElementById('pages').value,
+    only_without_website: document.getElementById('noweb').checked,
+  }});
+  const region = document.getElementById('region').value;
+  if(region) params.append('region', region);
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true; setStatus('Suche läuft…');
+  try {{
+    const r = await fetch('/scraper/run?'+params, {{method:'POST'}});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail || 'Fehler');
+    setStatus(`✅ ${{j.total_found}} gefunden · ${{j.leads_without_website}} ohne Website hinzugefügt`, 'ok');
+    setTimeout(()=>location.reload(), 1200);
+  }} catch(e){{ setStatus('❌ '+e.message, 'err'); btn.disabled = false; }}
+}}
+
+async function gen(leadId, force){{
+  setStatus('Generiere Seite per AI…');
+  const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}`, {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
+  setStatus('✅ Seite generiert: '+j.site.slug, 'ok');
+  setTimeout(()=>location.reload(), 800);
+}}
+
+async function batchGen(){{
+  setStatus('Batch-Generierung läuft (kann dauern)…');
+  const r = await fetch('/sites/generate-batch?limit=5', {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
+  const ok = j.results.filter(x=>x.status==='ok').length;
+  setStatus(`✅ ${{ok}}/${{j.processed}} Seiten generiert`, 'ok');
+  setTimeout(()=>location.reload(), 1200);
+}}
+
+async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
 async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
 </script>
 </body></html>""")
