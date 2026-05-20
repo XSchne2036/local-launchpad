@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from pydantic import BaseModel, EmailStr
 
-from . import ai, renderer, scraper, storage, themes, tunnels
+from . import ai, i18n, renderer, scraper, storage, themes, tunnels
 
 app = FastAPI(title="LocalLift Backend", version="0.2.0")
 
@@ -78,7 +78,7 @@ def _find_lead(lead_id: str) -> dict:
 @app.post("/sites/generate/{lead_id}")
 def generate_site(
     lead_id: str,
-    language: str = Query("de"),
+    language: str = Query("auto", description="'auto' = aus Region erkennen; sonst de/en/id"),
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
     theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
@@ -87,12 +87,15 @@ def generate_site(
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
-        return {"status": "exists", "site": {k: v for k, v in existing.items() if k != "html"}}
+        return {"status": "exists", "site": {k: v for k, v in existing.items() if k not in ("html", "translations_html")}}
 
     chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
+    resolved_lang = i18n.detect_language(lead) if language == "auto" else language
+    if resolved_lang not in i18n.SUPPORTED_LANGUAGES:
+        resolved_lang = i18n.DEFAULT_LANGUAGE
 
     try:
-        content = ai.generate_content(lead, language=language, theme=chosen_theme)
+        content = ai.generate_content(lead, language=resolved_lang, theme=chosen_theme)
     except ai.AIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -103,11 +106,15 @@ def generate_site(
         "id": slug,
         "lead_id": lead_id,
         "slug": slug,
-        "language": language,
+        "language": resolved_lang,
+        "language_source": "auto" if language == "auto" else "manual",
+        "detected_region": i18n.detect_region(lead),
         "theme": chosen_theme["key"],
         "theme_name": chosen_theme["name"],
         "content": content,
         "html": html_doc,
+        "translations": {},          # {lang: content}
+        "translations_html": {},     # {lang: html}
         "status": "generated",
         "claimed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -115,7 +122,49 @@ def generate_site(
 
     saved = storage.upsert("sites", site)
     storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
-    return {"status": "ok", "site": {k: v for k, v in saved.items() if k != "html"}}
+    return {"status": "ok", "site": {k: v for k, v in saved.items() if k not in ("html", "translations_html")}}
+
+
+@app.post("/sites/{slug}/translate")
+def translate_site(
+    slug: str,
+    languages: str = Query("en,id", description="Komma-getrennte Zielsprachen (de,en,id)"),
+):
+    """Batch-Übersetzt eine bereits generierte Seite in N Zielsprachen und rendert sie."""
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+
+    targets = [l.strip() for l in languages.split(",") if l.strip()]
+    targets = [l for l in targets if l in i18n.SUPPORTED_LANGUAGES and l != site.get("language")]
+    if not targets:
+        return {"status": "noop", "reason": "Keine gültigen Zielsprachen (oder identisch mit Quelle)"}
+
+    lead = _find_lead(site["lead_id"])
+    theme_obj = themes.get_theme(site.get("theme", "default"))
+
+    try:
+        translations = i18n.translate_batch(site["content"], targets)
+    except ai.AIError as e:
+        raise HTTPException(502, str(e))
+
+    existing_tr = site.get("translations") or {}
+    existing_html = site.get("translations_html") or {}
+    for lang, content in translations.items():
+        existing_tr[lang] = content
+        existing_html[lang] = renderer.render_site(lead, content, slug, theme=theme_obj)
+
+    updated = storage.upsert("sites", {
+        **site,
+        "translations": existing_tr,
+        "translations_html": existing_html,
+    })
+    return {
+        "status": "ok",
+        "slug": slug,
+        "added": list(translations.keys()),
+        "available_languages": [updated["language"]] + list(existing_tr.keys()),
+    }
 
 
 @app.get("/themes")
@@ -129,9 +178,10 @@ def list_themes_endpoint() -> dict:
 @app.post("/sites/generate-batch")
 def generate_batch(
     limit: int = Query(5, ge=1, le=50),
-    language: str = Query("de"),
+    language: str = Query("auto", description="'auto' = pro Lead aus Region erkennen"),
+    translate_to: str | None = Query(None, description="Komma-getrennt: nach Generierung in diese Sprachen übersetzen"),
 ):
-    """Generiert Webseiten für die nächsten N Leads ohne Site."""
+    """Generiert Webseiten für die nächsten N Leads ohne Site. Optional: Auto-Übersetzungen."""
     leads = storage.load("leads")
     generated_slugs = {s.get("lead_id") for s in storage.load("sites")}
     todo = [l for l in leads if l.get("id") not in generated_slugs][:limit]
@@ -140,7 +190,15 @@ def generate_batch(
     for lead in todo:
         try:
             r = generate_site(lead["id"], language=language, force=False)
-            results.append({"lead_id": lead["id"], "status": "ok", "slug": r["site"]["slug"]})
+            slug = r["site"]["slug"]
+            row = {"lead_id": lead["id"], "status": "ok", "slug": slug, "language": r["site"].get("language")}
+            if translate_to:
+                try:
+                    tr = translate_site(slug, languages=translate_to)
+                    row["translated"] = tr.get("added", [])
+                except HTTPException as te:
+                    row["translation_error"] = te.detail
+            results.append(row)
         except HTTPException as e:
             results.append({"lead_id": lead["id"], "status": "error", "detail": e.detail})
     return {"processed": len(results), "results": results}
@@ -149,16 +207,28 @@ def generate_batch(
 @app.get("/sites")
 def list_sites() -> dict:
     sites = storage.load("sites")
+    public_fields = lambda s: {k: v for k, v in s.items() if k not in ("html", "translations_html")}
     return {
         "count": len(sites),
-        "sites": [{k: v for k, v in s.items() if k != "html"} for s in sites],
+        "sites": [
+            {
+                **public_fields(s),
+                "available_languages": [s.get("language")] + list((s.get("translations") or {}).keys()),
+            }
+            for s in sites
+        ],
     }
 
 
 @app.get("/sites/{slug}", response_class=HTMLResponse)
-def view_site(slug: str) -> HTMLResponse:
+def view_site(slug: str, lang: str | None = Query(None, description="Optional: en/id/de für Übersetzung")) -> HTMLResponse:
     for s in storage.load("sites"):
         if s.get("slug") == slug:
+            if lang and lang != s.get("language"):
+                tr_html = (s.get("translations_html") or {}).get(lang)
+                if tr_html:
+                    return HTMLResponse(content=tr_html)
+                raise HTTPException(404, f"Übersetzung '{lang}' nicht vorhanden. Erst /sites/{slug}/translate?languages={lang} aufrufen.")
             return HTMLResponse(content=s["html"])
     raise HTTPException(status_code=404, detail="Site nicht gefunden")
 
@@ -310,10 +380,22 @@ def index() -> HTMLResponse:
         theme_key = s.get("theme", "default")
         theme_obj = themes.get_theme(theme_key)
         theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
+        translations = s.get("translations") or {}
+        all_langs = [s.get("language")] + list(translations.keys())
+        lang_links = " · ".join(
+            f'<a href="/sites/{s["slug"]}{"?lang="+lg if lg != s.get("language") else ""}" target="_blank">{lg}{"★" if lg == s.get("language") else ""}</a>'
+            for lg in all_langs if lg
+        )
+        missing = [lg for lg in ("de", "en", "id") if lg not in all_langs]
+        tr_btn = (
+            f'<button class="ghost" onclick="translate(\'{s["slug"]}\', \'{",".join(missing)}\')">+ {", ".join(missing)}</button>'
+            if missing else '<span style="color:#94a3b8;font-size:.8rem">alle</span>'
+        )
+        src_note = '<span title="Auto erkannt" style="color:#15803d">🌐</span> ' if s.get("language_source") == "auto" else ""
         site_rows += f"""<tr>
           <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
           <td>{theme_cell}</td>
-          <td>{s.get('language','')}</td>
+          <td>{src_note}{lang_links}<br>{tr_btn}</td>
           <td>{claimed}</td>
           <td>{pub}</td>
           <td>{action}</td>
@@ -376,8 +458,9 @@ a{{color:#1e40af}}
 <div class="card">
   <div class="row">
     <label>Suchbegriff<input id="q" class="wide" placeholder="z.B. Friseur in Berlin Mitte" value=""></label>
-    <label>Sprache
+    <label>Sprache (Quelle)
       <select id="lang">
+        <option value="auto">🌐 Auto (aus Region)</option>
         <option value="de">Deutsch</option>
         <option value="en">English</option>
         <option value="id">Bahasa Indonesia</option>
@@ -397,6 +480,9 @@ a{{color:#1e40af}}
     <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
       <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
     </label>
+    <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
+      <input id="autoTr" type="checkbox" style="min-width:auto"> Batch: auch übersetzen (en,id)
+    </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
     <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
   </div>
@@ -408,7 +494,7 @@ a{{color:#1e40af}}
 <tbody>{lead_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Leads. Scraper oben starten.</td></tr>'}</tbody></table>
 
 <h2>🌐 Generierte Sites</h2>
-<table><thead><tr><th>Site</th><th>Theme</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
+<table><thead><tr><th>Site</th><th>Theme</th><th>Sprachen</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
 <tbody>{site_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Seiten generiert.</td></tr>'}</tbody></table>
 
 <p style="margin-top:30px;color:#64748b;font-size:.9rem">
@@ -442,22 +528,34 @@ async function runScraper(){{
 }}
 
 async function gen(leadId, force){{
-  setStatus('Generiere Seite per AI…');
-  const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}`, {{method:'POST'}});
+  const lang = document.getElementById('lang').value;
+  setStatus('Generiere Seite per AI ('+lang+')…');
+  const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}&language=${{lang}}`, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
-  setStatus('✅ Seite generiert: '+j.site.slug, 'ok');
+  setStatus('✅ Seite generiert ('+(j.site.language||'?')+'): '+j.site.slug, 'ok');
   setTimeout(()=>location.reload(), 800);
 }}
 
 async function batchGen(){{
+  const lang = document.getElementById('lang').value;
+  const tr = document.getElementById('autoTr').checked ? '&translate_to=en,id' : '';
   setStatus('Batch-Generierung läuft (kann dauern)…');
-  const r = await fetch('/sites/generate-batch?limit=5', {{method:'POST'}});
+  const r = await fetch('/sites/generate-batch?limit=5&language='+lang+tr, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
   const ok = j.results.filter(x=>x.status==='ok').length;
   setStatus(`✅ ${{ok}}/${{j.processed}} Seiten generiert`, 'ok');
   setTimeout(()=>location.reload(), 1200);
+}}
+
+async function translate(slug, langs){{
+  setStatus('Übersetze '+slug+' → '+langs+'…');
+  const r = await fetch(`/sites/${{slug}}/translate?languages=${{langs}}`, {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
+  setStatus('✅ Übersetzt: '+(j.added||[]).join(', '), 'ok');
+  setTimeout(()=>location.reload(), 800);
 }}
 
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
