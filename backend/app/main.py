@@ -380,10 +380,22 @@ def index() -> HTMLResponse:
         theme_key = s.get("theme", "default")
         theme_obj = themes.get_theme(theme_key)
         theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
+        translations = s.get("translations") or {}
+        all_langs = [s.get("language")] + list(translations.keys())
+        lang_links = " · ".join(
+            f'<a href="/sites/{s["slug"]}{"?lang="+lg if lg != s.get("language") else ""}" target="_blank">{lg}{"★" if lg == s.get("language") else ""}</a>'
+            for lg in all_langs if lg
+        )
+        missing = [lg for lg in ("de", "en", "id") if lg not in all_langs]
+        tr_btn = (
+            f'<button class="ghost" onclick="translate(\'{s["slug"]}\', \'{",".join(missing)}\')">+ {", ".join(missing)}</button>'
+            if missing else '<span style="color:#94a3b8;font-size:.8rem">alle</span>'
+        )
+        src_note = '<span title="Auto erkannt" style="color:#15803d">🌐</span> ' if s.get("language_source") == "auto" else ""
         site_rows += f"""<tr>
           <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
           <td>{theme_cell}</td>
-          <td>{s.get('language','')}</td>
+          <td>{src_note}{lang_links}<br>{tr_btn}</td>
           <td>{claimed}</td>
           <td>{pub}</td>
           <td>{action}</td>
