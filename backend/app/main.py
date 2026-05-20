@@ -528,22 +528,34 @@ async function runScraper(){{
 }}
 
 async function gen(leadId, force){{
-  setStatus('Generiere Seite per AI…');
-  const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}`, {{method:'POST'}});
+  const lang = document.getElementById('lang').value;
+  setStatus('Generiere Seite per AI ('+lang+')…');
+  const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}&language=${{lang}}`, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
-  setStatus('✅ Seite generiert: '+j.site.slug, 'ok');
+  setStatus('✅ Seite generiert ('+(j.site.language||'?')+'): '+j.site.slug, 'ok');
   setTimeout(()=>location.reload(), 800);
 }}
 
 async function batchGen(){{
+  const lang = document.getElementById('lang').value;
+  const tr = document.getElementById('autoTr').checked ? '&translate_to=en,id' : '';
   setStatus('Batch-Generierung läuft (kann dauern)…');
-  const r = await fetch('/sites/generate-batch?limit=5', {{method:'POST'}});
+  const r = await fetch('/sites/generate-batch?limit=5&language='+lang+tr, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
   const ok = j.results.filter(x=>x.status==='ok').length;
   setStatus(`✅ ${{ok}}/${{j.processed}} Seiten generiert`, 'ok');
   setTimeout(()=>location.reload(), 1200);
+}}
+
+async function translate(slug, langs){{
+  setStatus('Übersetze '+slug+' → '+langs+'…');
+  const r = await fetch(`/sites/${{slug}}/translate?languages=${{langs}}`, {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
+  setStatus('✅ Übersetzt: '+(j.added||[]).join(', '), 'ok');
+  setTimeout(()=>location.reload(), 800);
 }}
 
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
