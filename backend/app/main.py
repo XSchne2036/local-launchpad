@@ -494,7 +494,7 @@ a{{color:#1e40af}}
 <tbody>{lead_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Leads. Scraper oben starten.</td></tr>'}</tbody></table>
 
 <h2>🌐 Generierte Sites</h2>
-<table><thead><tr><th>Site</th><th>Theme</th><th>Sprache</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
+<table><thead><tr><th>Site</th><th>Theme</th><th>Sprachen</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
 <tbody>{site_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Seiten generiert.</td></tr>'}</tbody></table>
 
 <p style="margin-top:30px;color:#64748b;font-size:.9rem">
