@@ -458,8 +458,9 @@ a{{color:#1e40af}}
 <div class="card">
   <div class="row">
     <label>Suchbegriff<input id="q" class="wide" placeholder="z.B. Friseur in Berlin Mitte" value=""></label>
-    <label>Sprache
+    <label>Sprache (Quelle)
       <select id="lang">
+        <option value="auto">🌐 Auto (aus Region)</option>
         <option value="de">Deutsch</option>
         <option value="en">English</option>
         <option value="id">Bahasa Indonesia</option>
@@ -478,6 +479,9 @@ a{{color:#1e40af}}
     <label>Seiten<input id="pages" type="number" min="1" max="5" value="2" style="min-width:70px"></label>
     <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
       <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
+    </label>
+    <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
+      <input id="autoTr" type="checkbox" style="min-width:auto"> Batch: auch übersetzen (en,id)
     </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
     <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
