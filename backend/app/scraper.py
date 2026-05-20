@@ -151,6 +151,7 @@ def find_leads(
             storage.upsert("leads", {
                 **lead,
                 "source_query": query,
+                "region_code": region,
                 "status": "new",
             })
 
