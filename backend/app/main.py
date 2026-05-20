@@ -78,7 +78,7 @@ def _find_lead(lead_id: str) -> dict:
 @app.post("/sites/generate/{lead_id}")
 def generate_site(
     lead_id: str,
-    language: str = Query("de"),
+    language: str = Query("auto", description="'auto' = aus Region erkennen; sonst de/en/id"),
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
     theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
@@ -87,12 +87,15 @@ def generate_site(
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
-        return {"status": "exists", "site": {k: v for k, v in existing.items() if k != "html"}}
+        return {"status": "exists", "site": {k: v for k, v in existing.items() if k not in ("html", "translations_html")}}
 
     chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
+    resolved_lang = i18n.detect_language(lead) if language == "auto" else language
+    if resolved_lang not in i18n.SUPPORTED_LANGUAGES:
+        resolved_lang = i18n.DEFAULT_LANGUAGE
 
     try:
-        content = ai.generate_content(lead, language=language, theme=chosen_theme)
+        content = ai.generate_content(lead, language=resolved_lang, theme=chosen_theme)
     except ai.AIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -103,11 +106,15 @@ def generate_site(
         "id": slug,
         "lead_id": lead_id,
         "slug": slug,
-        "language": language,
+        "language": resolved_lang,
+        "language_source": "auto" if language == "auto" else "manual",
+        "detected_region": i18n.detect_region(lead),
         "theme": chosen_theme["key"],
         "theme_name": chosen_theme["name"],
         "content": content,
         "html": html_doc,
+        "translations": {},          # {lang: content}
+        "translations_html": {},     # {lang: html}
         "status": "generated",
         "claimed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -115,7 +122,49 @@ def generate_site(
 
     saved = storage.upsert("sites", site)
     storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
-    return {"status": "ok", "site": {k: v for k, v in saved.items() if k != "html"}}
+    return {"status": "ok", "site": {k: v for k, v in saved.items() if k not in ("html", "translations_html")}}
+
+
+@app.post("/sites/{slug}/translate")
+def translate_site(
+    slug: str,
+    languages: str = Query("en,id", description="Komma-getrennte Zielsprachen (de,en,id)"),
+):
+    """Batch-Übersetzt eine bereits generierte Seite in N Zielsprachen und rendert sie."""
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+
+    targets = [l.strip() for l in languages.split(",") if l.strip()]
+    targets = [l for l in targets if l in i18n.SUPPORTED_LANGUAGES and l != site.get("language")]
+    if not targets:
+        return {"status": "noop", "reason": "Keine gültigen Zielsprachen (oder identisch mit Quelle)"}
+
+    lead = _find_lead(site["lead_id"])
+    theme_obj = themes.get_theme(site.get("theme", "default"))
+
+    try:
+        translations = i18n.translate_batch(site["content"], targets)
+    except ai.AIError as e:
+        raise HTTPException(502, str(e))
+
+    existing_tr = site.get("translations") or {}
+    existing_html = site.get("translations_html") or {}
+    for lang, content in translations.items():
+        existing_tr[lang] = content
+        existing_html[lang] = renderer.render_site(lead, content, slug, theme=theme_obj)
+
+    updated = storage.upsert("sites", {
+        **site,
+        "translations": existing_tr,
+        "translations_html": existing_html,
+    })
+    return {
+        "status": "ok",
+        "slug": slug,
+        "added": list(translations.keys()),
+        "available_languages": [updated["language"]] + list(existing_tr.keys()),
+    }
 
 
 @app.get("/themes")
