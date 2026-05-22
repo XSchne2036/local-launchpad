@@ -9,7 +9,9 @@ from fastapi.responses import HTMLResponse
 
 from pydantic import BaseModel, EmailStr
 
-from . import ai, i18n, renderer, scraper, storage, themes, tunnels
+from fastapi import Request
+
+from . import ai, i18n, outreach, renderer, scraper, storage, themes, tunnels, versions
 
 app = FastAPI(title="LocalLift Backend", version="0.2.0")
 
