@@ -9,7 +9,9 @@ from fastapi.responses import HTMLResponse
 
 from pydantic import BaseModel, EmailStr
 
-from . import ai, i18n, renderer, scraper, storage, themes, tunnels
+from fastapi import Request
+
+from . import ai, i18n, outreach, renderer, scraper, storage, themes, tunnels, versions
 
 app = FastAPI(title="LocalLift Backend", version="0.2.0")
 
@@ -88,6 +90,8 @@ def generate_site(
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
         return {"status": "exists", "site": {k: v for k, v in existing.items() if k not in ("html", "translations_html")}}
+    if existing and force:
+        versions.snapshot_site(existing, reason="regenerate")
 
     chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
     resolved_lang = i18n.detect_language(lead) if language == "auto" else language
@@ -314,7 +318,183 @@ def approve_claim(claim_id: str) -> dict:
     return {"status": "approved"}
 
 
+
+
+# ---------------- Versions / Diff ----------------
+
+def _build_site_url(request: Request, slug: str) -> str:
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if site and site.get("public_url"):
+        return site["public_url"]
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/sites/{slug}"
+
+
+@app.get("/sites/{slug}/versions")
+def site_versions(slug: str) -> dict:
+    items = versions.list_versions(slug)
+    return {"count": len(items), "versions": [
+        {k: v for k, v in it.items() if k not in ("html", "content")} for it in items
+    ]}
+
+
+@app.get("/sites/{slug}/diff", response_class=HTMLResponse)
+def site_diff(slug: str, version_id: str | None = None) -> HTMLResponse:
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+    vlist = versions.list_versions(slug)
+    if not vlist:
+        return HTMLResponse('<div style="padding:30px;font:14px system-ui;color:#64748b">Keine früheren Versionen – Diff verfügbar nach erstmaligem „Neu generieren".</div>')
+    old = versions.get_version(version_id) if version_id else vlist[0]
+    if not old:
+        raise HTTPException(404, "Version nicht gefunden")
+    diff_text = versions.diff_content(old.get("content") or {}, site.get("content") or {})
+    diff_body = versions.diff_html(diff_text)
+    options = "".join(
+        f'<option value="{v["id"]}"{" selected" if v["id"]==old["id"] else ""}>{v["created_at"][:19].replace("T"," ")} ({v.get("reason","")})</option>'
+        for v in vlist
+    )
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Diff – {slug}</title>
+<style>body{{font:14px ui-monospace,Menlo,monospace;background:#0f172a;color:#e2e8f0;margin:0;padding:20px}}
+h2{{font-family:system-ui;color:#fff;margin:0 0 14px}} .bar{{font-family:system-ui;margin-bottom:16px;display:flex;gap:10px;align-items:center}}
+select{{padding:6px 10px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px}}
+pre{{background:#1e293b;padding:18px;border-radius:10px;overflow:auto;line-height:1.5;white-space:pre}}
+.diff-add{{color:#86efac;display:block}} .diff-del{{color:#fca5a5;display:block}}
+.diff-meta{{color:#fbbf24;display:block;font-weight:700}} .diff-hunk{{color:#7dd3fc;display:block;margin-top:8px}}
+.diff-ctx{{color:#94a3b8;display:block}}
+</style></head><body>
+<h2>📝 Diff: alte Version → aktuell ({slug})</h2>
+<div class="bar"><label>Vergleichs-Version:</label>
+<select onchange="location.href='/sites/{slug}/diff?version_id='+this.value">{options}</select>
+<a href="/sites/{slug}" target="_blank" style="color:#7dd3fc">→ aktuelle Seite</a></div>
+<pre>{diff_body}</pre></body></html>""")
+
+
+@app.get("/sites/{slug}/preview", response_class=HTMLResponse)
+def site_preview(slug: str, lang: str | None = None) -> HTMLResponse:
+    """Live-Preview im Admin: iframe mit Sprach-Switcher, ohne Claim-Banner-Bypass."""
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+    all_langs = [site.get("language")] + list((site.get("translations") or {}).keys())
+    all_langs = [l for l in all_langs if l]
+    current = lang or site.get("language")
+    src = f"/sites/{slug}" + (f"?lang={current}" if current != site.get("language") else "")
+    lang_btns = "".join(
+        f'<a href="/sites/{slug}/preview?lang={l}" class="{"active" if l==current else ""}">{l}</a>'
+        for l in all_langs
+    )
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Preview – {slug}</title>
+<style>body,html{{margin:0;height:100%;font:14px system-ui;background:#0f172a;color:#e2e8f0}}
+.bar{{display:flex;gap:10px;align-items:center;padding:10px 16px;background:#1e293b;border-bottom:1px solid #334155}}
+.bar a{{color:#cbd5e1;padding:4px 10px;border-radius:6px;text-decoration:none;border:1px solid #334155}}
+.bar a.active{{background:#1e40af;color:#fff;border-color:#1e40af}}
+.bar .spacer{{flex:1}} iframe{{display:block;width:100%;height:calc(100vh - 49px);border:0;background:#fff}}
+.dev{{display:inline-flex;gap:6px;margin-left:8px}} .dev button{{background:#334155;color:#fff;border:0;padding:4px 10px;border-radius:6px;cursor:pointer}}
+</style></head><body>
+<div class="bar">
+  <b>👁 {slug}</b>
+  <span>{lang_btns}</span>
+  <div class="dev">
+    <button onclick="vp('375px')">📱</button>
+    <button onclick="vp('768px')">📲</button>
+    <button onclick="vp('100%')">🖥</button>
+  </div>
+  <div class="spacer"></div>
+  <a href="/sites/{slug}/diff" target="_blank">📝 Diff</a>
+  <a href="{src}" target="_blank">↗ Vollbild</a>
+</div>
+<div style="display:flex;justify-content:center;background:#0f172a"><iframe id="f" src="{src}" style="max-width:100%"></iframe></div>
+<script>function vp(w){{document.getElementById('f').style.maxWidth=w}}</script>
+</body></html>""")
+
+
+# ---------------- Outreach (SMTP) ----------------
+
+class OutreachPayload(BaseModel):
+    to: EmailStr | None = None
+    language: str | None = None  # auto = aus site/language
+    custom_subject: str | None = None
+    custom_body: str | None = None
+
+
+@app.get("/outreach/config")
+def outreach_config() -> dict:
+    cfg = outreach.smtp_config()
+    return {k: v for k, v in cfg.items() if k != "password"}
+
+
+@app.get("/outreach")
+def outreach_list() -> dict:
+    items = sorted(storage.load("outreach"), key=lambda x: x.get("sent_at", ""), reverse=True)
+    return {"count": len(items), "outreach": items}
+
+
+@app.post("/outreach/send/{lead_id}")
+def outreach_send(lead_id: str, payload: OutreachPayload, request: Request) -> dict:
+    lead = _find_lead(lead_id)
+    site = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
+    if not site:
+        raise HTTPException(400, "Lead hat keine generierte Seite – erst /sites/generate/{lead_id} aufrufen.")
+
+    to_email = (payload.to or lead.get("email") or "").strip()
+    if not to_email:
+        raise HTTPException(400, "Keine E-Mail-Adresse vorhanden. Bitte 'to' angeben.")
+
+    cfg = outreach.smtp_config()
+    if not cfg["configured"]:
+        raise HTTPException(503, "SMTP nicht konfiguriert. Siehe /outreach/config.")
+
+    lang = payload.language or site.get("language") or "de"
+    site_url = _build_site_url(request, site["slug"])
+    subject, body = outreach.render_template(lang, lead, site_url, cfg["from_name"])
+    if payload.custom_subject:
+        subject = payload.custom_subject
+    if payload.custom_body:
+        body = payload.custom_body
+
+    try:
+        result = outreach.send_email(to_email, subject, body, cfg=cfg)
+    except outreach.OutreachError as e:
+        outreach.log_outreach({"lead_id": lead_id, "slug": site["slug"], "to": to_email,
+                               "subject": subject, "language": lang, "status": "error", "error": str(e)})
+        raise HTTPException(502, str(e))
+
+    log = outreach.log_outreach({
+        "lead_id": lead_id, "slug": site["slug"], "to": to_email, "subject": subject,
+        "language": lang, "status": "sent", "message_id": result["message_id"],
+        "site_url": site_url,
+    })
+    storage.upsert("leads", {**lead, "status": "contacted", "last_outreach_at": log["sent_at"]})
+    return {"status": "ok", "outreach": log}
+
+
+@app.post("/outreach/send-batch")
+def outreach_batch(request: Request, limit: int = Query(10, ge=1, le=50)) -> dict:
+    sites = storage.load("sites")
+    leads_by_id = {l["id"]: l for l in storage.load("leads")}
+    already = {o["lead_id"] for o in storage.load("outreach") if o.get("status") == "sent"}
+    results = []
+    for site in sites:
+        if len(results) >= limit:
+            break
+        lid = site.get("lead_id")
+        if lid in already:
+            continue
+        lead = leads_by_id.get(lid)
+        if not lead or not lead.get("email"):
+            continue
+        try:
+            r = outreach_send(lid, OutreachPayload(), request)
+            results.append({"lead_id": lid, "status": "ok", "to": r["outreach"]["to"]})
+        except HTTPException as e:
+            results.append({"lead_id": lid, "status": "error", "detail": e.detail})
+    return {"processed": len(results), "results": results}
+
+
 # ---------------- Claim-Formular (HTML) ----------------
+
 
 @app.get("/claim/{slug}", response_class=HTMLResponse)
 def claim_form(slug: str) -> HTMLResponse:
@@ -364,8 +544,15 @@ def index() -> HTMLResponse:
     sites = storage.load("sites")
     leads = storage.load("leads")
     claims = storage.load("claims")
+    out_log = storage.load("outreach")
     tun = {t["slug"]: t for t in tunnels.list_tunnels()}
     sites_by_lead = {s.get("lead_id"): s for s in sites}
+    outreach_by_lead = {o.get("lead_id"): o for o in sorted(out_log, key=lambda x: x.get("sent_at",""))}
+    smtp_cfg = outreach.smtp_config()
+    versions_count = {slug: 0 for slug in (s["slug"] for s in sites)}
+    for v in storage.load("site_versions"):
+        if v.get("slug") in versions_count:
+            versions_count[v["slug"]] += 1
 
     site_rows = ""
     for s in sites:
@@ -392,8 +579,12 @@ def index() -> HTMLResponse:
             if missing else '<span style="color:#94a3b8;font-size:.8rem">alle</span>'
         )
         src_note = '<span title="Auto erkannt" style="color:#15803d">🌐</span> ' if s.get("language_source") == "auto" else ""
+        vcount = versions_count.get(s["slug"], 0)
+        diff_btn = (f'<a href="/sites/{s["slug"]}/diff" target="_blank" class="pill">📝 Diff ({vcount})</a>'
+                    if vcount else '<span style="color:#94a3b8;font-size:.78rem">v1</span>')
+        preview_btn = f'<a href="/sites/{s["slug"]}/preview" target="_blank" class="pill">👁 Preview</a>'
         site_rows += f"""<tr>
-          <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
+          <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small><br>{preview_btn} {diff_btn}</td>
           <td>{theme_cell}</td>
           <td>{src_note}{lang_links}<br>{tr_btn}</td>
           <td>{claimed}</td>
@@ -408,20 +599,31 @@ def index() -> HTMLResponse:
         has_site = l["id"] in sites_by_lead
         if has_site:
             site = sites_by_lead[l["id"]]
-            site_cell = f'<a href="/sites/{site["slug"]}" target="_blank">✅ ansehen</a>'
+            site_cell = f'<a href="/sites/{site["slug"]}/preview" target="_blank">👁 Preview</a>'
             gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
         else:
             site_cell = '<span style="color:#94a3b8">–</span>'
             gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Seite generieren</button>'
         phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
         rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
+        email_val = l.get("email") or ""
+        last_out = outreach_by_lead.get(l["id"])
+        out_status = (f'<span style="color:#15803d">📧 {last_out["sent_at"][:10]}</span>'
+                      if last_out and last_out.get("status") == "sent"
+                      else ('<span style="color:#b91c1c">⚠ Fehler</span>' if last_out else '<span style="color:#94a3b8">–</span>'))
+        if has_site and smtp_cfg["configured"]:
+            mail_btn = f'<button class="ghost" onclick="mail(\'{l["id"]}\', \'{email_val}\')">✉ Mail</button>'
+        elif has_site:
+            mail_btn = '<span style="color:#94a3b8;font-size:.78rem" title="SMTP konfigurieren">SMTP fehlt</span>'
+        else:
+            mail_btn = '<span style="color:#94a3b8;font-size:.78rem">erst generieren</span>'
         lead_rows += f"""<tr>
-          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small></td>
+          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small>{'<br><small style=\"color:#1e40af\">'+email_val+'</small>' if email_val else ''}</td>
           <td><small>{l.get('primary_type','') or ''}</small></td>
           <td>{phone}</td>
           <td>{rating}</td>
-          <td>{site_cell}</td>
-          <td>{gen_btn}</td>
+          <td>{site_cell}<br>{out_status}</td>
+          <td>{gen_btn} {mail_btn}</td>
         </tr>"""
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
@@ -444,15 +646,19 @@ a{{color:#1e40af}}
 .row input.wide{{min-width:340px}}
 #status{{margin-top:10px;font-size:.9rem;color:#64748b;min-height:20px}}
 #status.err{{color:#b91c1c}} #status.ok{{color:#15803d}}
+.pill{{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#1e40af;font-size:.75rem;font-weight:600;text-decoration:none;margin-right:4px}}
+.pill:hover{{background:#e0e7ff}}
 </style></head><body>
 <h1>LocalLift – Admin</h1>
 <div class="stats">
   <div><b>{len(leads)}</b>Leads</div>
   <div><b>{len(sites)}</b>Generierte Seiten</div>
+  <div><b>{sum(1 for o in out_log if o.get('status')=='sent')}</b>E-Mails gesendet</div>
   <div><b>{sum(1 for t in tun.values() if t['status']=='running')}</b>Aktive Tunnels</div>
   <div><b>{len(claims)}</b>Claim-Anfragen</div>
 </div>
 {'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
+{'' if smtp_cfg['configured'] else '<div class="warn">✉️ <b>SMTP nicht konfiguriert</b> – Outreach deaktiviert. Setze <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, <code>SMTP_PASS</code> (optional <code>SMTP_PORT</code>, <code>SMTP_SECURE=starttls|ssl|none</code>, <code>SMTP_FROM_NAME</code>) in <code>backend/.env</code>.</div>' if not smtp_cfg['configured'] else f'<div style="background:#dcfce7;color:#166534;padding:10px 14px;border-radius:10px;margin:12px 0;font-size:.9rem">✉️ SMTP bereit · {smtp_cfg["host"]}:{smtp_cfg["port"]} · Absender <b>{smtp_cfg["from_email"]}</b></div>'}
 
 <h2>🔎 Scraper – Leads finden</h2>
 <div class="card">
@@ -485,6 +691,7 @@ a{{color:#1e40af}}
     </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
     <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
+    <button class="ghost" onclick="batchMail()">📧 Batch-Outreach (10)</button>
   </div>
   <div id="status"></div>
 </div>
@@ -560,5 +767,28 @@ async function translate(slug, langs){{
 
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
 async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
+
+async function mail(leadId, prefill){{
+  const to = prompt('Empfänger-E-Mail:', prefill || '');
+  if(!to) return;
+  setStatus('Sende E-Mail an '+to+'…');
+  const r = await fetch('/outreach/send/'+leadId, {{method:'POST', headers:{{'Content-Type':'application/json'}},
+    body: JSON.stringify({{to: to}})}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
+  setStatus('✅ Gesendet an '+j.outreach.to, 'ok');
+  setTimeout(()=>location.reload(), 1000);
+}}
+
+async function batchMail(){{
+  if(!confirm('Outreach an bis zu 10 Leads (mit E-Mail + generierter Seite) senden?')) return;
+  setStatus('Batch-Outreach läuft…');
+  const r = await fetch('/outreach/send-batch?limit=10', {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
+  const ok = j.results.filter(x=>x.status==='ok').length;
+  setStatus(`✅ ${{ok}}/${{j.processed}} E-Mails gesendet`, 'ok');
+  setTimeout(()=>location.reload(), 1200);
+}}
 </script>
 </body></html>""")
