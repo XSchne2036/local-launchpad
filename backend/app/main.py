@@ -599,20 +599,31 @@ def index() -> HTMLResponse:
         has_site = l["id"] in sites_by_lead
         if has_site:
             site = sites_by_lead[l["id"]]
-            site_cell = f'<a href="/sites/{site["slug"]}" target="_blank">✅ ansehen</a>'
+            site_cell = f'<a href="/sites/{site["slug"]}/preview" target="_blank">👁 Preview</a>'
             gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
         else:
             site_cell = '<span style="color:#94a3b8">–</span>'
             gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Seite generieren</button>'
         phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
         rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
+        email_val = l.get("email") or ""
+        last_out = outreach_by_lead.get(l["id"])
+        out_status = (f'<span style="color:#15803d">📧 {last_out["sent_at"][:10]}</span>'
+                      if last_out and last_out.get("status") == "sent"
+                      else ('<span style="color:#b91c1c">⚠ Fehler</span>' if last_out else '<span style="color:#94a3b8">–</span>'))
+        if has_site and smtp_cfg["configured"]:
+            mail_btn = f'<button class="ghost" onclick="mail(\'{l["id"]}\', \'{email_val}\')">✉ Mail</button>'
+        elif has_site:
+            mail_btn = '<span style="color:#94a3b8;font-size:.78rem" title="SMTP konfigurieren">SMTP fehlt</span>'
+        else:
+            mail_btn = '<span style="color:#94a3b8;font-size:.78rem">erst generieren</span>'
         lead_rows += f"""<tr>
-          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small></td>
+          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small>{'<br><small style=\"color:#1e40af\">'+email_val+'</small>' if email_val else ''}</td>
           <td><small>{l.get('primary_type','') or ''}</small></td>
           <td>{phone}</td>
           <td>{rating}</td>
-          <td>{site_cell}</td>
-          <td>{gen_btn}</td>
+          <td>{site_cell}<br>{out_status}</td>
+          <td>{gen_btn} {mail_btn}</td>
         </tr>"""
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
