@@ -90,6 +90,8 @@ def generate_site(
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
     if existing and not force:
         return {"status": "exists", "site": {k: v for k, v in existing.items() if k not in ("html", "translations_html")}}
+    if existing and force:
+        versions.snapshot_site(existing, reason="regenerate")
 
     chosen_theme = themes.get_theme(theme) if theme else themes.detect_theme(lead)
     resolved_lang = i18n.detect_language(lead) if language == "auto" else language
