@@ -544,8 +544,15 @@ def index() -> HTMLResponse:
     sites = storage.load("sites")
     leads = storage.load("leads")
     claims = storage.load("claims")
+    out_log = storage.load("outreach")
     tun = {t["slug"]: t for t in tunnels.list_tunnels()}
     sites_by_lead = {s.get("lead_id"): s for s in sites}
+    outreach_by_lead = {o.get("lead_id"): o for o in sorted(out_log, key=lambda x: x.get("sent_at",""))}
+    smtp_cfg = outreach.smtp_config()
+    versions_count = {slug: 0 for slug in (s["slug"] for s in sites)}
+    for v in storage.load("site_versions"):
+        if v.get("slug") in versions_count:
+            versions_count[v["slug"]] += 1
 
     site_rows = ""
     for s in sites:
