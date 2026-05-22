@@ -767,5 +767,28 @@ async function translate(slug, langs){{
 
 async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
 async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
+
+async function mail(leadId, prefill){{
+  const to = prompt('Empfänger-E-Mail:', prefill || '');
+  if(!to) return;
+  setStatus('Sende E-Mail an '+to+'…');
+  const r = await fetch('/outreach/send/'+leadId, {{method:'POST', headers:{{'Content-Type':'application/json'}},
+    body: JSON.stringify({{to: to}})}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
+  setStatus('✅ Gesendet an '+j.outreach.to, 'ok');
+  setTimeout(()=>location.reload(), 1000);
+}}
+
+async function batchMail(){{
+  if(!confirm('Outreach an bis zu 10 Leads (mit E-Mail + generierter Seite) senden?')) return;
+  setStatus('Batch-Outreach läuft…');
+  const r = await fetch('/outreach/send-batch?limit=10', {{method:'POST'}});
+  const j = await r.json();
+  if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
+  const ok = j.results.filter(x=>x.status==='ok').length;
+  setStatus(`✅ ${{ok}}/${{j.processed}} E-Mails gesendet`, 'ok');
+  setTimeout(()=>location.reload(), 1200);
+}}
 </script>
 </body></html>""")
