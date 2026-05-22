@@ -646,15 +646,19 @@ a{{color:#1e40af}}
 .row input.wide{{min-width:340px}}
 #status{{margin-top:10px;font-size:.9rem;color:#64748b;min-height:20px}}
 #status.err{{color:#b91c1c}} #status.ok{{color:#15803d}}
+.pill{{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#1e40af;font-size:.75rem;font-weight:600;text-decoration:none;margin-right:4px}}
+.pill:hover{{background:#e0e7ff}}
 </style></head><body>
 <h1>LocalLift – Admin</h1>
 <div class="stats">
   <div><b>{len(leads)}</b>Leads</div>
   <div><b>{len(sites)}</b>Generierte Seiten</div>
+  <div><b>{sum(1 for o in out_log if o.get('status')=='sent')}</b>E-Mails gesendet</div>
   <div><b>{sum(1 for t in tun.values() if t['status']=='running')}</b>Aktive Tunnels</div>
   <div><b>{len(claims)}</b>Claim-Anfragen</div>
 </div>
 {'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
+{'' if smtp_cfg['configured'] else '<div class="warn">✉️ <b>SMTP nicht konfiguriert</b> – Outreach deaktiviert. Setze <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, <code>SMTP_PASS</code> (optional <code>SMTP_PORT</code>, <code>SMTP_SECURE=starttls|ssl|none</code>, <code>SMTP_FROM_NAME</code>) in <code>backend/.env</code>.</div>' if not smtp_cfg['configured'] else f'<div style="background:#dcfce7;color:#166534;padding:10px 14px;border-radius:10px;margin:12px 0;font-size:.9rem">✉️ SMTP bereit · {smtp_cfg["host"]}:{smtp_cfg["port"]} · Absender <b>{smtp_cfg["from_email"]}</b></div>'}
 
 <h2>🔎 Scraper – Leads finden</h2>
 <div class="card">
