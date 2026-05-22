@@ -579,8 +579,12 @@ def index() -> HTMLResponse:
             if missing else '<span style="color:#94a3b8;font-size:.8rem">alle</span>'
         )
         src_note = '<span title="Auto erkannt" style="color:#15803d">🌐</span> ' if s.get("language_source") == "auto" else ""
+        vcount = versions_count.get(s["slug"], 0)
+        diff_btn = (f'<a href="/sites/{s["slug"]}/diff" target="_blank" class="pill">📝 Diff ({vcount})</a>'
+                    if vcount else '<span style="color:#94a3b8;font-size:.78rem">v1</span>')
+        preview_btn = f'<a href="/sites/{s["slug"]}/preview" target="_blank" class="pill">👁 Preview</a>'
         site_rows += f"""<tr>
-          <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small></td>
+          <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small><br>{preview_btn} {diff_btn}</td>
           <td>{theme_cell}</td>
           <td>{src_note}{lang_links}<br>{tr_btn}</td>
           <td>{claimed}</td>
