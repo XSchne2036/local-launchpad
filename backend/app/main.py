@@ -318,7 +318,183 @@ def approve_claim(claim_id: str) -> dict:
     return {"status": "approved"}
 
 
+
+
+# ---------------- Versions / Diff ----------------
+
+def _build_site_url(request: Request, slug: str) -> str:
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if site and site.get("public_url"):
+        return site["public_url"]
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/sites/{slug}"
+
+
+@app.get("/sites/{slug}/versions")
+def site_versions(slug: str) -> dict:
+    items = versions.list_versions(slug)
+    return {"count": len(items), "versions": [
+        {k: v for k, v in it.items() if k not in ("html", "content")} for it in items
+    ]}
+
+
+@app.get("/sites/{slug}/diff", response_class=HTMLResponse)
+def site_diff(slug: str, version_id: str | None = None) -> HTMLResponse:
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+    vlist = versions.list_versions(slug)
+    if not vlist:
+        return HTMLResponse('<div style="padding:30px;font:14px system-ui;color:#64748b">Keine früheren Versionen – Diff verfügbar nach erstmaligem „Neu generieren".</div>')
+    old = versions.get_version(version_id) if version_id else vlist[0]
+    if not old:
+        raise HTTPException(404, "Version nicht gefunden")
+    diff_text = versions.diff_content(old.get("content") or {}, site.get("content") or {})
+    diff_body = versions.diff_html(diff_text)
+    options = "".join(
+        f'<option value="{v["id"]}"{" selected" if v["id"]==old["id"] else ""}>{v["created_at"][:19].replace("T"," ")} ({v.get("reason","")})</option>'
+        for v in vlist
+    )
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Diff – {slug}</title>
+<style>body{{font:14px ui-monospace,Menlo,monospace;background:#0f172a;color:#e2e8f0;margin:0;padding:20px}}
+h2{{font-family:system-ui;color:#fff;margin:0 0 14px}} .bar{{font-family:system-ui;margin-bottom:16px;display:flex;gap:10px;align-items:center}}
+select{{padding:6px 10px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px}}
+pre{{background:#1e293b;padding:18px;border-radius:10px;overflow:auto;line-height:1.5;white-space:pre}}
+.diff-add{{color:#86efac;display:block}} .diff-del{{color:#fca5a5;display:block}}
+.diff-meta{{color:#fbbf24;display:block;font-weight:700}} .diff-hunk{{color:#7dd3fc;display:block;margin-top:8px}}
+.diff-ctx{{color:#94a3b8;display:block}}
+</style></head><body>
+<h2>📝 Diff: alte Version → aktuell ({slug})</h2>
+<div class="bar"><label>Vergleichs-Version:</label>
+<select onchange="location.href='/sites/{slug}/diff?version_id='+this.value">{options}</select>
+<a href="/sites/{slug}" target="_blank" style="color:#7dd3fc">→ aktuelle Seite</a></div>
+<pre>{diff_body}</pre></body></html>""")
+
+
+@app.get("/sites/{slug}/preview", response_class=HTMLResponse)
+def site_preview(slug: str, lang: str | None = None) -> HTMLResponse:
+    """Live-Preview im Admin: iframe mit Sprach-Switcher, ohne Claim-Banner-Bypass."""
+    site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
+    if not site:
+        raise HTTPException(404, "Site nicht gefunden")
+    all_langs = [site.get("language")] + list((site.get("translations") or {}).keys())
+    all_langs = [l for l in all_langs if l]
+    current = lang or site.get("language")
+    src = f"/sites/{slug}" + (f"?lang={current}" if current != site.get("language") else "")
+    lang_btns = "".join(
+        f'<a href="/sites/{slug}/preview?lang={l}" class="{"active" if l==current else ""}">{l}</a>'
+        for l in all_langs
+    )
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Preview – {slug}</title>
+<style>body,html{{margin:0;height:100%;font:14px system-ui;background:#0f172a;color:#e2e8f0}}
+.bar{{display:flex;gap:10px;align-items:center;padding:10px 16px;background:#1e293b;border-bottom:1px solid #334155}}
+.bar a{{color:#cbd5e1;padding:4px 10px;border-radius:6px;text-decoration:none;border:1px solid #334155}}
+.bar a.active{{background:#1e40af;color:#fff;border-color:#1e40af}}
+.bar .spacer{{flex:1}} iframe{{display:block;width:100%;height:calc(100vh - 49px);border:0;background:#fff}}
+.dev{{display:inline-flex;gap:6px;margin-left:8px}} .dev button{{background:#334155;color:#fff;border:0;padding:4px 10px;border-radius:6px;cursor:pointer}}
+</style></head><body>
+<div class="bar">
+  <b>👁 {slug}</b>
+  <span>{lang_btns}</span>
+  <div class="dev">
+    <button onclick="vp('375px')">📱</button>
+    <button onclick="vp('768px')">📲</button>
+    <button onclick="vp('100%')">🖥</button>
+  </div>
+  <div class="spacer"></div>
+  <a href="/sites/{slug}/diff" target="_blank">📝 Diff</a>
+  <a href="{src}" target="_blank">↗ Vollbild</a>
+</div>
+<div style="display:flex;justify-content:center;background:#0f172a"><iframe id="f" src="{src}" style="max-width:100%"></iframe></div>
+<script>function vp(w){{document.getElementById('f').style.maxWidth=w}}</script>
+</body></html>""")
+
+
+# ---------------- Outreach (SMTP) ----------------
+
+class OutreachPayload(BaseModel):
+    to: EmailStr | None = None
+    language: str | None = None  # auto = aus site/language
+    custom_subject: str | None = None
+    custom_body: str | None = None
+
+
+@app.get("/outreach/config")
+def outreach_config() -> dict:
+    cfg = outreach.smtp_config()
+    return {k: v for k, v in cfg.items() if k != "password"}
+
+
+@app.get("/outreach")
+def outreach_list() -> dict:
+    items = sorted(storage.load("outreach"), key=lambda x: x.get("sent_at", ""), reverse=True)
+    return {"count": len(items), "outreach": items}
+
+
+@app.post("/outreach/send/{lead_id}")
+def outreach_send(lead_id: str, payload: OutreachPayload, request: Request) -> dict:
+    lead = _find_lead(lead_id)
+    site = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
+    if not site:
+        raise HTTPException(400, "Lead hat keine generierte Seite – erst /sites/generate/{lead_id} aufrufen.")
+
+    to_email = (payload.to or lead.get("email") or "").strip()
+    if not to_email:
+        raise HTTPException(400, "Keine E-Mail-Adresse vorhanden. Bitte 'to' angeben.")
+
+    cfg = outreach.smtp_config()
+    if not cfg["configured"]:
+        raise HTTPException(503, "SMTP nicht konfiguriert. Siehe /outreach/config.")
+
+    lang = payload.language or site.get("language") or "de"
+    site_url = _build_site_url(request, site["slug"])
+    subject, body = outreach.render_template(lang, lead, site_url, cfg["from_name"])
+    if payload.custom_subject:
+        subject = payload.custom_subject
+    if payload.custom_body:
+        body = payload.custom_body
+
+    try:
+        result = outreach.send_email(to_email, subject, body, cfg=cfg)
+    except outreach.OutreachError as e:
+        outreach.log_outreach({"lead_id": lead_id, "slug": site["slug"], "to": to_email,
+                               "subject": subject, "language": lang, "status": "error", "error": str(e)})
+        raise HTTPException(502, str(e))
+
+    log = outreach.log_outreach({
+        "lead_id": lead_id, "slug": site["slug"], "to": to_email, "subject": subject,
+        "language": lang, "status": "sent", "message_id": result["message_id"],
+        "site_url": site_url,
+    })
+    storage.upsert("leads", {**lead, "status": "contacted", "last_outreach_at": log["sent_at"]})
+    return {"status": "ok", "outreach": log}
+
+
+@app.post("/outreach/send-batch")
+def outreach_batch(request: Request, limit: int = Query(10, ge=1, le=50)) -> dict:
+    sites = storage.load("sites")
+    leads_by_id = {l["id"]: l for l in storage.load("leads")}
+    already = {o["lead_id"] for o in storage.load("outreach") if o.get("status") == "sent"}
+    results = []
+    for site in sites:
+        if len(results) >= limit:
+            break
+        lid = site.get("lead_id")
+        if lid in already:
+            continue
+        lead = leads_by_id.get(lid)
+        if not lead or not lead.get("email"):
+            continue
+        try:
+            r = outreach_send(lid, OutreachPayload(), request)
+            results.append({"lead_id": lid, "status": "ok", "to": r["outreach"]["to"]})
+        except HTTPException as e:
+            results.append({"lead_id": lid, "status": "error", "detail": e.detail})
+    return {"processed": len(results), "results": results}
+
+
 # ---------------- Claim-Formular (HTML) ----------------
+
 
 @app.get("/claim/{slug}", response_class=HTMLResponse)
 def claim_form(slug: str) -> HTMLResponse:
