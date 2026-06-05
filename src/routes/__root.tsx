@@ -72,14 +72,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
+      { title: "Der Webseitenmacher" },
+      { name: "description", content: "Local Launchpad automatically finds local businesses without websites and generates free, modern landing pages for them." },
       { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { property: "og:title", content: "Der Webseitenmacher" },
+      { property: "og:description", content: "Local Launchpad automatically finds local businesses without websites and generates free, modern landing pages for them." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "Der Webseitenmacher" },
+      { name: "twitter:description", content: "Local Launchpad automatically finds local businesses without websites and generates free, modern landing pages for them." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/b22945b7-0e79-44ff-bddc-624dffa9494d/id-preview-17296b9d--d23aad74-c02f-4579-b0cd-3782843aaca8.lovable.app-1779253782304.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/b22945b7-0e79-44ff-bddc-624dffa9494d/id-preview-17296b9d--d23aad74-c02f-4579-b0cd-3782843aaca8.lovable.app-1779253782304.png" },
     ],
     links: [
       {
