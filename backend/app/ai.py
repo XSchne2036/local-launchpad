@@ -121,7 +121,8 @@ def generate_content(
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {_key()}",
+        "Lovable-API-Key": _key(),
+        "X-Lovable-AIG-SDK": "locallift-backend",
     }
 
     with httpx.Client(timeout=120.0) as client:

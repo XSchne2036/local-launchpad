@@ -133,7 +133,11 @@ def translate_content(
         "tools": [{"type": "function", "function": TRANSLATE_SCHEMA}],
         "tool_choice": {"type": "function", "function": {"name": "translated_content"}},
     }
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {_key()}"}
+    headers = {
+        "Content-Type": "application/json",
+        "Lovable-API-Key": _key(),
+        "X-Lovable-AIG-SDK": "locallift-backend",
+    }
 
     with httpx.Client(timeout=120.0) as client:
         resp = client.post(GATEWAY_URL, headers=headers, json=body)
