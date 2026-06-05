@@ -1,0 +1,9 @@
+# LocalLift
+
+> LocalLift findet lokale Unternehmen ohne Website auf Google Maps und erstellt automatisch moderne, SEO-optimierte Landingpages mit KI.
+
+LocalLift ist eine Automatisierungsplattform für lokale Unternehmen: Lead-Scraping über Google Maps, KI-Generierung branchenspezifischer Webseiten, Mehrsprachigkeit (DE/EN/ID), E-Mail-Outreach und Live-Preview im Admin.
+
+## Pages
+
+- [Startseite](/): Übersicht, Funktionsweise, Features, Preise.

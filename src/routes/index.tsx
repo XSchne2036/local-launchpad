@@ -20,6 +20,26 @@ export const Route = createFileRoute("/")({
     meta: [
       { title: "LocalLift — Automatische Webseiten für lokale Unternehmen" },
       { name: "description", content: "Wir finden lokale Unternehmen ohne Website auf Google Maps und erstellen automatisch moderne, SEO-optimierte Landingpages mit KI." },
+      { property: "og:title", content: "LocalLift — Automatische Webseiten für lokale Unternehmen" },
+      { property: "og:description", content: "Wir finden lokale Unternehmen ohne Website auf Google Maps und erstellen automatisch moderne, SEO-optimierte Landingpages mit KI." },
+      { property: "og:url", content: "https://webseitenmacher.lovable.app/" },
+    ],
+    links: [
+      { rel: "canonical", href: "https://webseitenmacher.lovable.app/" },
+    ],
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: "LocalLift",
+          applicationCategory: "BusinessApplication",
+          operatingSystem: "Web",
+          url: "https://webseitenmacher.lovable.app/",
+          offers: { "@type": "Offer", price: "0", priceCurrency: "EUR" },
+        }),
+      },
     ],
   }),
 });
