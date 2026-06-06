@@ -374,18 +374,24 @@ pre{{background:#1e293b;padding:18px;border-radius:10px;overflow:auto;line-heigh
 @app.get("/sites/{slug}/preview", response_class=HTMLResponse)
 def site_preview(slug: str, lang: str | None = None) -> HTMLResponse:
     """Live-Preview im Admin: iframe mit Sprach-Switcher, ohne Claim-Banner-Bypass."""
+    import html as _html
     site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
     if not site:
         raise HTTPException(404, "Site nicht gefunden")
+    # Validate lang against the supported set to prevent reflected XSS.
+    if lang and lang not in i18n.SUPPORTED_LANGUAGES:
+        lang = None
     all_langs = [site.get("language")] + list((site.get("translations") or {}).keys())
-    all_langs = [l for l in all_langs if l]
+    all_langs = [l for l in all_langs if l and l in i18n.SUPPORTED_LANGUAGES]
     current = lang or site.get("language")
     src = f"/sites/{slug}" + (f"?lang={current}" if current != site.get("language") else "")
+    src_e = _html.escape(src, quote=True)
+    slug_e = _html.escape(slug, quote=True)
     lang_btns = "".join(
-        f'<a href="/sites/{slug}/preview?lang={l}" class="{"active" if l==current else ""}">{l}</a>'
+        f'<a href="/sites/{slug_e}/preview?lang={_html.escape(l, quote=True)}" class="{"active" if l==current else ""}">{_html.escape(l)}</a>'
         for l in all_langs
     )
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Preview – {slug}</title>
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Preview – {slug_e}</title>
 <style>body,html{{margin:0;height:100%;font:14px system-ui;background:#0f172a;color:#e2e8f0}}
 .bar{{display:flex;gap:10px;align-items:center;padding:10px 16px;background:#1e293b;border-bottom:1px solid #334155}}
 .bar a{{color:#cbd5e1;padding:4px 10px;border-radius:6px;text-decoration:none;border:1px solid #334155}}
@@ -394,7 +400,7 @@ def site_preview(slug: str, lang: str | None = None) -> HTMLResponse:
 .dev{{display:inline-flex;gap:6px;margin-left:8px}} .dev button{{background:#334155;color:#fff;border:0;padding:4px 10px;border-radius:6px;cursor:pointer}}
 </style></head><body>
 <div class="bar">
-  <b>👁 {slug}</b>
+  <b>👁 {slug_e}</b>
   <span>{lang_btns}</span>
   <div class="dev">
     <button onclick="vp('375px')">📱</button>
@@ -402,10 +408,10 @@ def site_preview(slug: str, lang: str | None = None) -> HTMLResponse:
     <button onclick="vp('100%')">🖥</button>
   </div>
   <div class="spacer"></div>
-  <a href="/sites/{slug}/diff" target="_blank">📝 Diff</a>
-  <a href="{src}" target="_blank">↗ Vollbild</a>
+  <a href="/sites/{slug_e}/diff" target="_blank">📝 Diff</a>
+  <a href="{src_e}" target="_blank">↗ Vollbild</a>
 </div>
-<div style="display:flex;justify-content:center;background:#0f172a"><iframe id="f" src="{src}" style="max-width:100%"></iframe></div>
+<div style="display:flex;justify-content:center;background:#0f172a"><iframe id="f" src="{src_e}" style="max-width:100%"></iframe></div>
 <script>function vp(w){{document.getElementById('f').style.maxWidth=w}}</script>
 </body></html>""")
 
@@ -421,8 +427,10 @@ class OutreachPayload(BaseModel):
 
 @app.get("/outreach/config")
 def outreach_config() -> dict:
+    """Public reconnaissance is limited to a boolean. Detailed SMTP settings
+    are only visible to operators via the .env file / server console."""
     cfg = outreach.smtp_config()
-    return {k: v for k, v in cfg.items() if k != "password"}
+    return {"configured": bool(cfg.get("configured"))}
 
 
 @app.get("/outreach")
@@ -501,7 +509,9 @@ def claim_form(slug: str) -> HTMLResponse:
     site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
     if not site:
         raise HTTPException(404, "Site nicht gefunden")
-    name = site["content"].get("hero_title", slug)
+    import html as _html
+    name = _html.escape(site["content"].get("hero_title") or slug)
+    slug_e = _html.escape(slug, quote=True)
     return HTMLResponse(f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <title>Webseite übernehmen – {name}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -527,7 +537,7 @@ document.getElementById('f').addEventListener('submit', async e => {{
   e.preventDefault();
   const fd = new FormData(e.target);
   const body = Object.fromEntries(fd.entries());
-  const r = await fetch('/claim/{slug}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+  const r = await fetch('/claim/{slug_e}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
   const j = await r.json();
   document.getElementById('r').innerHTML = r.ok
     ? '<div class="ok">Danke! Wir melden uns innerhalb von 24h per E-Mail.</div>'
