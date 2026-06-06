@@ -509,7 +509,9 @@ def claim_form(slug: str) -> HTMLResponse:
     site = next((s for s in storage.load("sites") if s.get("slug") == slug), None)
     if not site:
         raise HTTPException(404, "Site nicht gefunden")
-    name = site["content"].get("hero_title", slug)
+    import html as _html
+    name = _html.escape(site["content"].get("hero_title") or slug)
+    slug_e = _html.escape(slug, quote=True)
     return HTMLResponse(f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <title>Webseite übernehmen – {name}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
