@@ -537,7 +537,7 @@ document.getElementById('f').addEventListener('submit', async e => {{
   e.preventDefault();
   const fd = new FormData(e.target);
   const body = Object.fromEntries(fd.entries());
-  const r = await fetch('/claim/{slug}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+  const r = await fetch('/claim/{slug_e}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
   const j = await r.json();
   document.getElementById('r').innerHTML = r.ok
     ? '<div class="ok">Danke! Wir melden uns innerhalb von 24h per E-Mail.</div>'
