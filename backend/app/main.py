@@ -427,8 +427,10 @@ class OutreachPayload(BaseModel):
 
 @app.get("/outreach/config")
 def outreach_config() -> dict:
+    """Public reconnaissance is limited to a boolean. Detailed SMTP settings
+    are only visible to operators via the .env file / server console."""
     cfg = outreach.smtp_config()
-    return {k: v for k, v in cfg.items() if k != "password"}
+    return {"configured": bool(cfg.get("configured"))}
 
 
 @app.get("/outreach")
