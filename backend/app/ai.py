@@ -8,6 +8,7 @@ import json
 import os
 import re
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
@@ -15,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions"
+LOVABLE_BUILD_URL_BASE = "https://lovable.dev/?autosubmit=true#"
 DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
 
@@ -78,6 +80,66 @@ def slugify(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s)
     return s.strip("-")[:60] or "site"
+
+
+def build_lovable_prompt(
+    lead: dict[str, Any],
+    language: str = "de",
+    theme: dict[str, Any] | None = None,
+) -> str:
+    """Prompt für Lovable API „Build with URL". Kein API-Key, kein Gateway-Call."""
+    from . import themes as _themes
+
+    theme = theme or _themes.detect_theme(lead)
+    business_type = lead.get("primary_type") or "local business"
+    types = ", ".join(lead.get("types", [])) or business_type
+    phone = lead.get("phone") or "nicht bekannt"
+    rating = (
+        f"{lead.get('rating')} Sterne aus {lead.get('rating_count', 0)} Bewertungen"
+        if lead.get("rating") else "nicht bekannt"
+    )
+    maps = lead.get("google_maps_uri") or "nicht bekannt"
+
+    return f"""Erstelle eine hochwertige, responsive One-Page-Website für ein lokales Unternehmen.
+
+Sprache der Website: {language}
+Unternehmen: {lead.get('name')}
+Branche: {business_type}
+Google-Places-Typen: {types}
+Adresse: {lead.get('address') or 'nicht bekannt'}
+Telefon: {phone}
+Bewertung: {rating}
+Google Maps Link: {maps}
+
+Designrichtung:
+- Branche/Theme: {theme['name']}
+- Tonalität: {theme['tone']}
+- Primärfarbe: {theme['primary']}
+- Akzentfarbe: {theme['accent']}
+- Stil: modern, lokal vertrauenswürdig, klar, conversion-orientiert
+
+Baue eine komplette Landingpage mit:
+1. Hero mit starkem H1, Subheadline und Call-to-Action
+2. Kurzprofil / Über uns
+3. 3 bis 6 passende Leistungen
+4. Vertrauenselemente mit Bewertung, lokaler Nähe und klaren Vorteilen
+5. Kontaktbereich mit Telefon, Adresse und Maps-Link
+6. Mobile-first Layout, gute SEO-Metadaten, semantisches HTML
+
+Vermeide generische Fülltexte. Nutze ausschließlich Informationen, die zur Branche und zum lokalen Unternehmen passen. Wenn Daten fehlen, formuliere neutral ohne sie zu erfinden."""
+
+
+def build_with_url(
+    lead: dict[str, Any],
+    language: str = "de",
+    theme: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Erzeugt den offiziellen Lovable-Build-Link: https://lovable.dev/?autosubmit=true#prompt=..."""
+    prompt = build_lovable_prompt(lead, language=language, theme=theme)
+    return {
+        "prompt": prompt,
+        "build_url": LOVABLE_BUILD_URL_BASE + "prompt=" + quote(prompt, safe=""),
+    }
 
 
 def generate_content(
