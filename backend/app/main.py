@@ -172,7 +172,7 @@ def generate_batch(
     """Erzeugt Lovable Build-with-URL-Links für die nächsten N Leads ohne Site."""
     leads = storage.load("leads")
     generated_slugs = {s.get("lead_id") for s in storage.load("sites")}
-    todo = [l for l in leads if l.get("id") not in generated_slugs][:limit]
+    todo = [l for l in leads if l.get("id") not in generated_slugs and not l.get("lovable_build_url")][:limit]
 
     results = []
     for lead in todo:
@@ -186,7 +186,7 @@ def generate_batch(
             })
         except HTTPException as e:
             results.append({"lead_id": lead["id"], "status": "error", "detail": e.detail})
-    return {"processed": len(results), "results": results}
+    return {"processed": len(results), "results": results, "translate_to_ignored": bool(translate_to)}
 
 
 @app.get("/sites")
@@ -682,7 +682,7 @@ a{{color:#1e40af}}
       <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
     </label>
     <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
-      <input id="autoTr" type="checkbox" style="min-width:auto"> Batch: auch übersetzen (en,id)
+      <input id="autoTr" type="checkbox" disabled style="min-width:auto"> Übersetzen erst nach Import/Preview
     </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
     <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
