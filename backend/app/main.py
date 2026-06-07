@@ -532,6 +532,8 @@ document.getElementById('f').addEventListener('submit', async e => {{
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
+    import html as _html
+
     sites = storage.load("sites")
     leads = storage.load("leads")
     claims = storage.load("claims")
@@ -593,8 +595,10 @@ def index() -> HTMLResponse:
             site_cell = f'<a href="/sites/{site["slug"]}/preview" target="_blank">👁 Preview</a>'
             gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
         else:
-            site_cell = '<span style="color:#94a3b8">–</span>'
-            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Seite generieren</button>'
+            build_url = l.get("lovable_build_url")
+            site_cell = (f'<a href="{_html.escape(build_url, quote=True)}" target="_blank" rel="noopener">🚀 Lovable Build öffnen</a>'
+                         if build_url else '<span style="color:#94a3b8">–</span>')
+            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Lovable Build-URL</button>'
         phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
         rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
         email_val = l.get("email") or ""
@@ -727,23 +731,28 @@ async function runScraper(){{
 
 async function gen(leadId, force){{
   const lang = document.getElementById('lang').value;
-  setStatus('Generiere Seite per AI ('+lang+')…');
+  setStatus('Erzeuge Lovable Build-URL ('+lang+')…');
   const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}&language=${{lang}}`, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
-  setStatus('✅ Seite generiert ('+(j.site.language||'?')+'): '+j.site.slug, 'ok');
-  setTimeout(()=>location.reload(), 800);
+  if(j.build_url){{
+    setStatus('✅ Lovable Build-URL bereit – öffne Lovable…', 'ok');
+    window.open(j.build_url, '_blank', 'noopener');
+  }} else {{
+    setStatus('✅ Bereits vorhanden.', 'ok');
+  }}
+  setTimeout(()=>location.reload(), 1000);
 }}
 
 async function batchGen(){{
   const lang = document.getElementById('lang').value;
-  const tr = document.getElementById('autoTr').checked ? '&translate_to=en,id' : '';
-  setStatus('Batch-Generierung läuft (kann dauern)…');
-  const r = await fetch('/sites/generate-batch?limit=5&language='+lang+tr, {{method:'POST'}});
+  setStatus('Erzeuge Batch Build-URLs…');
+  const r = await fetch('/sites/generate-batch?limit=5&language='+lang, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
-  const ok = j.results.filter(x=>x.status==='ok').length;
-  setStatus(`✅ ${{ok}}/${{j.processed}} Seiten generiert`, 'ok');
+  const ok = j.results.filter(x=>x.build_url).length;
+  if(ok && j.results[0].build_url) window.open(j.results[0].build_url, '_blank', 'noopener');
+  setStatus(`✅ ${{ok}}/${{j.processed}} Lovable Build-URLs bereit`, 'ok');
   setTimeout(()=>location.reload(), 1200);
 }}
 
