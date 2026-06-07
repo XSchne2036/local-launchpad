@@ -1,6 +1,6 @@
 """
-Lovable AI Gateway Client.
-Generiert strukturierte Website-Inhalte aus einem Lead.
+Lovable API Helpers.
+Seiten-Start via Build-with-URL; optionale strukturierte Inhalte/Übersetzungen via AI Gateway.
 """
 from __future__ import annotations
 

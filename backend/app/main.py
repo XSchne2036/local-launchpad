@@ -685,7 +685,7 @@ a{{color:#1e40af}}
       <input id="autoTr" type="checkbox" disabled style="min-width:auto"> Übersetzen erst nach Import/Preview
     </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
-    <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
+    <button class="ghost" onclick="batchGen()">Batch: 5 Build-URLs</button>
     <button class="ghost" onclick="batchMail()">📧 Batch-Outreach (10)</button>
   </div>
   <div id="status"></div>
