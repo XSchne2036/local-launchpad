@@ -84,7 +84,7 @@ def generate_site(
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
     theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
-    """Generiert (oder regeneriert) eine Webseite für ein Lead per Lovable AI."""
+    """Erzeugt den offiziellen Lovable Build-with-URL-Link für ein Lead."""
     lead = _find_lead(lead_id)
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
@@ -98,35 +98,19 @@ def generate_site(
     if resolved_lang not in i18n.SUPPORTED_LANGUAGES:
         resolved_lang = i18n.DEFAULT_LANGUAGE
 
-    try:
-        content = ai.generate_content(lead, language=resolved_lang, theme=chosen_theme)
-    except ai.AIError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    slug = ai.slugify(lead.get("name") or lead_id) + "-" + lead_id[-6:].lower()
-    html_doc = renderer.render_site(lead, content, slug, theme=chosen_theme)
-
-    site = {
-        "id": slug,
+    build = ai.build_with_url(lead, language=resolved_lang, theme=chosen_theme)
+    storage.upsert("leads", {**lead, "status": "lovable_build_ready", "lovable_build_url": build["build_url"]})
+    return {
+        "status": "build_url",
         "lead_id": lead_id,
-        "slug": slug,
         "language": resolved_lang,
         "language_source": "auto" if language == "auto" else "manual",
         "detected_region": i18n.detect_region(lead),
         "theme": chosen_theme["key"],
         "theme_name": chosen_theme["name"],
-        "content": content,
-        "html": html_doc,
-        "translations": {},          # {lang: content}
-        "translations_html": {},     # {lang: html}
-        "status": "generated",
-        "claimed": False,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "build_url": build["build_url"],
+        "prompt": build["prompt"],
     }
-
-    saved = storage.upsert("sites", site)
-    storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
-    return {"status": "ok", "site": {k: v for k, v in saved.items() if k not in ("html", "translations_html")}}
 
 
 @app.post("/sites/{slug}/translate")
@@ -185,27 +169,24 @@ def generate_batch(
     language: str = Query("auto", description="'auto' = pro Lead aus Region erkennen"),
     translate_to: str | None = Query(None, description="Komma-getrennt: nach Generierung in diese Sprachen übersetzen"),
 ):
-    """Generiert Webseiten für die nächsten N Leads ohne Site. Optional: Auto-Übersetzungen."""
+    """Erzeugt Lovable Build-with-URL-Links für die nächsten N Leads ohne Site."""
     leads = storage.load("leads")
     generated_slugs = {s.get("lead_id") for s in storage.load("sites")}
-    todo = [l for l in leads if l.get("id") not in generated_slugs][:limit]
+    todo = [l for l in leads if l.get("id") not in generated_slugs and not l.get("lovable_build_url")][:limit]
 
     results = []
     for lead in todo:
         try:
             r = generate_site(lead["id"], language=language, force=False)
-            slug = r["site"]["slug"]
-            row = {"lead_id": lead["id"], "status": "ok", "slug": slug, "language": r["site"].get("language")}
-            if translate_to:
-                try:
-                    tr = translate_site(slug, languages=translate_to)
-                    row["translated"] = tr.get("added", [])
-                except HTTPException as te:
-                    row["translation_error"] = te.detail
-            results.append(row)
+            results.append({
+                "lead_id": lead["id"],
+                "status": r.get("status", "build_url"),
+                "language": r.get("language"),
+                "build_url": r.get("build_url"),
+            })
         except HTTPException as e:
             results.append({"lead_id": lead["id"], "status": "error", "detail": e.detail})
-    return {"processed": len(results), "results": results}
+    return {"processed": len(results), "results": results, "translate_to_ignored": bool(translate_to)}
 
 
 @app.get("/sites")
@@ -551,6 +532,8 @@ document.getElementById('f').addEventListener('submit', async e => {{
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
+    import html as _html
+
     sites = storage.load("sites")
     leads = storage.load("leads")
     claims = storage.load("claims")
@@ -612,8 +595,10 @@ def index() -> HTMLResponse:
             site_cell = f'<a href="/sites/{site["slug"]}/preview" target="_blank">👁 Preview</a>'
             gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
         else:
-            site_cell = '<span style="color:#94a3b8">–</span>'
-            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Seite generieren</button>'
+            build_url = l.get("lovable_build_url")
+            site_cell = (f'<a href="{_html.escape(build_url, quote=True)}" target="_blank" rel="noopener">🚀 Lovable Build öffnen</a>'
+                         if build_url else '<span style="color:#94a3b8">–</span>')
+            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Lovable Build-URL</button>'
         phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
         rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
         email_val = l.get("email") or ""
@@ -697,10 +682,10 @@ a{{color:#1e40af}}
       <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
     </label>
     <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
-      <input id="autoTr" type="checkbox" style="min-width:auto"> Batch: auch übersetzen (en,id)
+      <input id="autoTr" type="checkbox" disabled style="min-width:auto"> Übersetzen erst nach Import/Preview
     </label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
-    <button class="ghost" onclick="batchGen()">Batch: 5 Seiten generieren</button>
+    <button class="ghost" onclick="batchGen()">Batch: 5 Build-URLs</button>
     <button class="ghost" onclick="batchMail()">📧 Batch-Outreach (10)</button>
   </div>
   <div id="status"></div>
@@ -746,23 +731,28 @@ async function runScraper(){{
 
 async function gen(leadId, force){{
   const lang = document.getElementById('lang').value;
-  setStatus('Generiere Seite per AI ('+lang+')…');
+  setStatus('Erzeuge Lovable Build-URL ('+lang+')…');
   const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}&language=${{lang}}`, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
-  setStatus('✅ Seite generiert ('+(j.site.language||'?')+'): '+j.site.slug, 'ok');
-  setTimeout(()=>location.reload(), 800);
+  if(j.build_url){{
+    setStatus('✅ Lovable Build-URL bereit – öffne Lovable…', 'ok');
+    window.open(j.build_url, '_blank', 'noopener');
+  }} else {{
+    setStatus('✅ Bereits vorhanden.', 'ok');
+  }}
+  setTimeout(()=>location.reload(), 1000);
 }}
 
 async function batchGen(){{
   const lang = document.getElementById('lang').value;
-  const tr = document.getElementById('autoTr').checked ? '&translate_to=en,id' : '';
-  setStatus('Batch-Generierung läuft (kann dauern)…');
-  const r = await fetch('/sites/generate-batch?limit=5&language='+lang+tr, {{method:'POST'}});
+  setStatus('Erzeuge Batch Build-URLs…');
+  const r = await fetch('/sites/generate-batch?limit=5&language='+lang, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
-  const ok = j.results.filter(x=>x.status==='ok').length;
-  setStatus(`✅ ${{ok}}/${{j.processed}} Seiten generiert`, 'ok');
+  const ok = j.results.filter(x=>x.build_url).length;
+  if(ok && j.results[0].build_url) window.open(j.results[0].build_url, '_blank', 'noopener');
+  setStatus(`✅ ${{ok}}/${{j.processed}} Lovable Build-URLs bereit`, 'ok');
   setTimeout(()=>location.reload(), 1200);
 }}
 
