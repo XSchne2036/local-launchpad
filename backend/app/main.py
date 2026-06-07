@@ -84,7 +84,7 @@ def generate_site(
     force: bool = Query(False, description="Vorhandene Seite überschreiben"),
     theme: str | None = Query(None, description="Theme-Key überschreiben (z.B. 'restaurant'); leer = Auto-Detect"),
 ):
-    """Generiert (oder regeneriert) eine Webseite für ein Lead per Lovable AI."""
+    """Erzeugt den offiziellen Lovable Build-with-URL-Link für ein Lead."""
     lead = _find_lead(lead_id)
 
     existing = next((s for s in storage.load("sites") if s.get("lead_id") == lead_id), None)
@@ -98,35 +98,19 @@ def generate_site(
     if resolved_lang not in i18n.SUPPORTED_LANGUAGES:
         resolved_lang = i18n.DEFAULT_LANGUAGE
 
-    try:
-        content = ai.generate_content(lead, language=resolved_lang, theme=chosen_theme)
-    except ai.AIError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    slug = ai.slugify(lead.get("name") or lead_id) + "-" + lead_id[-6:].lower()
-    html_doc = renderer.render_site(lead, content, slug, theme=chosen_theme)
-
-    site = {
-        "id": slug,
+    build = ai.build_with_url(lead, language=resolved_lang, theme=chosen_theme)
+    storage.upsert("leads", {**lead, "status": "lovable_build_ready", "lovable_build_url": build["build_url"]})
+    return {
+        "status": "build_url",
         "lead_id": lead_id,
-        "slug": slug,
         "language": resolved_lang,
         "language_source": "auto" if language == "auto" else "manual",
         "detected_region": i18n.detect_region(lead),
         "theme": chosen_theme["key"],
         "theme_name": chosen_theme["name"],
-        "content": content,
-        "html": html_doc,
-        "translations": {},          # {lang: content}
-        "translations_html": {},     # {lang: html}
-        "status": "generated",
-        "claimed": False,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "build_url": build["build_url"],
+        "prompt": build["prompt"],
     }
-
-    saved = storage.upsert("sites", site)
-    storage.upsert("leads", {**lead, "status": "site_generated", "site_slug": slug})
-    return {"status": "ok", "site": {k: v for k, v in saved.items() if k not in ("html", "translations_html")}}
 
 
 @app.post("/sites/{slug}/translate")
@@ -185,7 +169,7 @@ def generate_batch(
     language: str = Query("auto", description="'auto' = pro Lead aus Region erkennen"),
     translate_to: str | None = Query(None, description="Komma-getrennt: nach Generierung in diese Sprachen übersetzen"),
 ):
-    """Generiert Webseiten für die nächsten N Leads ohne Site. Optional: Auto-Übersetzungen."""
+    """Erzeugt Lovable Build-with-URL-Links für die nächsten N Leads ohne Site."""
     leads = storage.load("leads")
     generated_slugs = {s.get("lead_id") for s in storage.load("sites")}
     todo = [l for l in leads if l.get("id") not in generated_slugs][:limit]
@@ -194,15 +178,12 @@ def generate_batch(
     for lead in todo:
         try:
             r = generate_site(lead["id"], language=language, force=False)
-            slug = r["site"]["slug"]
-            row = {"lead_id": lead["id"], "status": "ok", "slug": slug, "language": r["site"].get("language")}
-            if translate_to:
-                try:
-                    tr = translate_site(slug, languages=translate_to)
-                    row["translated"] = tr.get("added", [])
-                except HTTPException as te:
-                    row["translation_error"] = te.detail
-            results.append(row)
+            results.append({
+                "lead_id": lead["id"],
+                "status": r.get("status", "build_url"),
+                "language": r.get("language"),
+                "build_url": r.get("build_url"),
+            })
         except HTTPException as e:
             results.append({"lead_id": lead["id"], "status": "error", "detail": e.detail})
     return {"processed": len(results), "results": results}
