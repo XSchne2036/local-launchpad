@@ -1,7 +1,7 @@
 # LocalLift Backend
 
 Python FastAPI Backend. Storage = JSON-Dateien in `data/`. Kein DB-Setup.
-AI-Generation via **Lovable AI Gateway** (kein extra OpenAI-Key nötig).
+Seiten-Erstellung via **Lovable API: Build with URL** (kein API-Key nötig).
 
 ## Setup
 
@@ -11,11 +11,11 @@ python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-# eintragen: GOOGLE_PLACES_API_KEY + LOVABLE_API_KEY
+# eintragen: GOOGLE_PLACES_API_KEY
 ```
 
 **Google Places Key**: https://console.cloud.google.com → "Places API (New)" aktivieren → API Key.
-**Lovable API Key**: Lovable Workspace → Settings → API Keys.
+**Lovable Build with URL**: Der Backend-Button erzeugt einen Link wie `https://lovable.dev/?autosubmit=true#prompt=...`.
 
 ## Starten (Port 8002, im LAN erreichbar)
 
@@ -33,10 +33,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 # 1. Leads scrapen (ohne Website)
 curl -X POST "http://localhost:8002/scraper/run?query=Friseur%20in%20Berlin%20Mitte&region=DE"
 
-# 2. Webseite für ein Lead generieren
+# 2. Lovable Build-URL für ein Lead erzeugen
 curl -X POST "http://localhost:8002/sites/generate/<LEAD_ID>?language=de"
 
-# 3. Bulk: 5 nächste Leads
+# 3. Bulk: Build-URLs für 5 nächste Leads
 curl -X POST "http://localhost:8002/sites/generate-batch?limit=5&language=de"
 
 # 4. Übersicht
