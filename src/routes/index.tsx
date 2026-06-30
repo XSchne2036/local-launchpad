@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 
 const BACKEND_URL =
-  (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "http://localhost:8002";
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "http://localhost:8000";
 
 const scrollTo = (id: string) => (e: React.MouseEvent) => {
   e.preventDefault();

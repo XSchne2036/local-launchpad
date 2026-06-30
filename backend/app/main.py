@@ -1,11 +1,13 @@
-"""FastAPI App. Start: uvicorn app.main:app --reload --host 0.0.0.0 --port 8002 (im backend/ Ordner)."""
+"""FastAPI App. Start: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 (im backend/ Ordner)."""
 from __future__ import annotations
 
+import re
+import urllib.parse
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from pydantic import BaseModel, EmailStr
 
@@ -482,6 +484,37 @@ def outreach_batch(request: Request, limit: int = Query(10, ge=1, le=50)) -> dic
     return {"processed": len(results), "results": results}
 
 
+# ---------------- vCard Download ----------------
+
+@app.get("/leads/{lead_id}/vcard")
+def download_vcard(lead_id: str) -> Response:
+    lead = _find_lead(lead_id)
+    name = lead.get("name", "")
+    phone = lead.get("phone", "")
+    email = lead.get("email", "")
+    address = lead.get("address", "")
+    website = lead.get("website", "")
+    name_safe = re.sub(r"[^\w\-]", "_", name)
+    vcf = "\r\n".join([
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        f"FN:{name}",
+        f"ORG:{name}",
+        f"TEL;TYPE=WORK,VOICE:{phone}" if phone else "",
+        f"EMAIL;TYPE=WORK:{email}" if email else "",
+        f"ADR;TYPE=WORK:;;{address};;;;" if address else "",
+        f"URL:{website}" if website else "",
+        "END:VCARD",
+    ])
+    # Remove empty lines
+    vcf = "\r\n".join(line for line in vcf.splitlines() if line)
+    return Response(
+        content=vcf,
+        media_type="text/vcard; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name_safe}.vcf"'},
+    )
+
+
 # ---------------- Claim-Formular (HTML) ----------------
 
 
@@ -530,6 +563,51 @@ document.getElementById('f').addEventListener('submit', async e => {{
 
 # ---------------- Admin Dashboard ----------------
 
+def _wa_phone(phone: str | None) -> str:
+    """Converts a phone number to a wa.me WhatsApp link (E.164-compatible)."""
+    import html as _h
+    if not phone:
+        return "<span style='color:#94a3b8'>–</span>"
+    # Step 1: strip formatting chars and optional trunk zero: +49 (0)30 → +4930
+    stripped = re.sub(r"[\s\-\(\)\/\.]", "", phone)
+    stripped = re.sub(r"(\+\d{1,3})\(0\)", r"\1", stripped)  # remove trunk (0) after CC
+    # Step 2: normalise to pure digits (no leading +)
+    if stripped.startswith("+"):
+        wa_num = stripped[1:]
+    elif stripped.startswith("0049"):
+        wa_num = "49" + stripped[4:]
+    elif stripped.startswith("00"):
+        wa_num = stripped[2:]
+    elif stripped.startswith("0"):
+        wa_num = "49" + stripped[1:]  # assume Germany
+    else:
+        wa_num = stripped
+    # Step 3: allow only digits in the wa.me path
+    wa_num = re.sub(r"\D", "", wa_num)
+    if not wa_num:
+        return f"<span>{_h.escape(phone)}</span>"
+    display = _h.escape(phone)
+    return (
+        f'<a href="https://wa.me/{wa_num}" target="_blank" rel="noopener" '
+        f'style="color:#25d366;white-space:nowrap;text-decoration:none">📱 {display}</a>'
+    )
+
+
+def _mailto_link(email: str | None, name: str) -> str:
+    """Creates a mailto: link pre-filled for Thunderbird."""
+    if not email:
+        return "<span style='color:#94a3b8'>–</span>"
+    import html as _h
+    subj = urllib.parse.quote(f"Ihre neue Webseite – {name}", safe="")
+    body = urllib.parse.quote(
+        f"Hallo,\n\nwir haben kostenlos eine moderne Webseite für Ihr Unternehmen erstellt.\n\n"
+        f"Schauen Sie gerne mal rein – wir besprechen gerne Details.\n\nMit freundlichen Grüßen",
+        safe="",
+    )
+    email_e = _h.escape(email, quote=True)
+    return f'<a href="mailto:{email_e}?subject={subj}&body={body}" style="white-space:nowrap">✉️ {_h.escape(email)}</a>'
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     import html as _html
@@ -540,30 +618,65 @@ def index() -> HTMLResponse:
     out_log = storage.load("outreach")
     tun = {t["slug"]: t for t in tunnels.list_tunnels()}
     sites_by_lead = {s.get("lead_id"): s for s in sites}
-    outreach_by_lead = {o.get("lead_id"): o for o in sorted(out_log, key=lambda x: x.get("sent_at",""))}
+    outreach_by_lead = {o.get("lead_id"): o for o in sorted(out_log, key=lambda x: x.get("sent_at", ""))}
     smtp_cfg = outreach.smtp_config()
-    versions_count = {slug: 0 for slug in (s["slug"] for s in sites)}
+    versions_count: dict[str, int] = {s["slug"]: 0 for s in sites}
     for v in storage.load("site_versions"):
         if v.get("slug") in versions_count:
             versions_count[v["slug"]] += 1
 
-    site_rows = ""
+    # ── Stats ────────────────────────────────────────────────────────────────
+    n_leads = len(leads)
+    n_build_ready = sum(1 for l in leads if l.get("lovable_build_url") and l["id"] not in sites_by_lead)
+    n_sites = len(sites)
+    n_sent = sum(1 for o in out_log if o.get("status") == "sent")
+    n_tunnels = sum(1 for t in tun.values() if t["status"] == "running")
+    n_claims = len(claims)
+
+    # ── Generierte / Build-ready Tabelle (untere Liste) ──────────────────────
+    gen_rows = ""
+
+    # 1. Leads with lovable_build_url but no full site yet
+    build_ready_leads = [l for l in sorted(leads, key=lambda x: x.get("discovered_at", ""), reverse=True)
+                         if l.get("lovable_build_url") and l["id"] not in sites_by_lead]
+    for l in build_ready_leads:
+        build_url = _html.escape(l["lovable_build_url"], quote=True)
+        name_e = _html.escape(l.get("name") or "")
+        addr_e = _html.escape(l.get("address") or "")
+        phone_cell = _wa_phone(l.get("phone"))
+        mail_cell = _mailto_link(l.get("email"), l.get("name") or "")
+        vcard_btn = f'<a href="/leads/{l["id"]}/vcard" title="Kontakt speichern" style="text-decoration:none">📇</a>'
+        gen_rows += f"""<tr class="build-row">
+          <td><b>{name_e}</b><br><small style="color:#64748b">{addr_e}</small></td>
+          <td><span class="pill" style="background:#fef9c3;color:#854d0e">🚀 Build-URL bereit</span></td>
+          <td>{phone_cell}</td>
+          <td>{mail_cell}</td>
+          <td><a href="{build_url}" target="_blank" rel="noopener" class="pill">🚀 Lovable öffnen</a></td>
+          <td>
+            <button class="ghost" onclick="gen('{l['id']}', true)">Neu</button>
+            {vcard_btn}
+          </td>
+        </tr>"""
+
+    # 2. Leads with full generated sites (sites.json)
     for s in sites:
         t = tun.get(s["slug"])
-        pub = f'<a href="{t["public_url"]}" target="_blank">{t["tunnel_host"]}</a>' if t and t["status"] == "running" else '<span style="color:#94a3b8">–</span>'
-        action = (
-            f'<button onclick="stop(\'{s["slug"]}\')">Stop</button>'
-            if t and t["status"] == "running"
-            else f'<button onclick="start(\'{s["slug"]}\')">Tunnel starten</button>'
-        )
+        pub = (f'<a href="{t["public_url"]}" target="_blank">{t["tunnel_host"]}</a>'
+               if t and t["status"] == "running" else '<span style="color:#94a3b8">–</span>')
+        action = (f'<button onclick="stop(\'{s["slug"]}\')">Stop</button>'
+                  if t and t["status"] == "running"
+                  else f'<button onclick="start(\'{s["slug"]}\')">Tunnel starten</button>')
         claimed = "✅" if s.get("claimed") else ("⏳" if s.get("claim_status") == "pending" else "—")
         theme_key = s.get("theme", "default")
         theme_obj = themes.get_theme(theme_key)
-        theme_cell = f'<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.8rem;border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>'
+        theme_cell = (f'<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;'
+                      f'background:{theme_obj["card"]};color:{theme_obj["primary"]};font-weight:600;font-size:.78rem;'
+                      f'border:1px solid {theme_obj["border"]}">{theme_obj["badge_emoji"]} {theme_obj["name"]}</span>')
         translations = s.get("translations") or {}
         all_langs = [s.get("language")] + list(translations.keys())
         lang_links = " · ".join(
-            f'<a href="/sites/{s["slug"]}{"?lang="+lg if lg != s.get("language") else ""}" target="_blank">{lg}{"★" if lg == s.get("language") else ""}</a>'
+            f'<a href="/sites/{s["slug"]}{"?lang="+lg if lg != s.get("language") else ""}" target="_blank">'
+            f'{lg}{"★" if lg == s.get("language") else ""}</a>'
             for lg in all_langs if lg
         )
         missing = [lg for lg in ("de", "en", "id") if lg not in all_langs]
@@ -571,97 +684,144 @@ def index() -> HTMLResponse:
             f'<button class="ghost" onclick="translate(\'{s["slug"]}\', \'{",".join(missing)}\')">+ {", ".join(missing)}</button>'
             if missing else '<span style="color:#94a3b8;font-size:.8rem">alle</span>'
         )
-        src_note = '<span title="Auto erkannt" style="color:#15803d">🌐</span> ' if s.get("language_source") == "auto" else ""
         vcount = versions_count.get(s["slug"], 0)
         diff_btn = (f'<a href="/sites/{s["slug"]}/diff" target="_blank" class="pill">📝 Diff ({vcount})</a>'
                     if vcount else '<span style="color:#94a3b8;font-size:.78rem">v1</span>')
         preview_btn = f'<a href="/sites/{s["slug"]}/preview" target="_blank" class="pill">👁 Preview</a>'
-        site_rows += f"""<tr>
-          <td><a href="/sites/{s['slug']}" target="_blank">{s['content'].get('hero_title', s['slug'])}</a><br><small>{s['slug']}</small><br>{preview_btn} {diff_btn}</td>
-          <td>{theme_cell}</td>
-          <td>{src_note}{lang_links}<br>{tr_btn}</td>
-          <td>{claimed}</td>
-          <td>{pub}</td>
-          <td>{action}</td>
+        lead_for_site = next((l for l in leads if l.get("id") == s.get("lead_id")), {})
+        phone_cell = _wa_phone(lead_for_site.get("phone"))
+        mail_cell = _mailto_link(lead_for_site.get("email"), lead_for_site.get("name") or s.get("slug", ""))
+        vcard_btn = (f'<a href="/leads/{s["lead_id"]}/vcard" title="Kontakt speichern" style="text-decoration:none">📇</a>'
+                     if s.get("lead_id") else "")
+        gen_rows += f"""<tr>
+          <td><a href="/sites/{s['slug']}" target="_blank"><b>{s['content'].get('hero_title', s['slug'])}</b></a><br>
+              <small style="color:#64748b">{s['slug']}</small><br>{preview_btn} {diff_btn}</td>
+          <td>{theme_cell}<br><small style="color:#94a3b8">{lang_links}</small><br>{tr_btn}</td>
+          <td>{phone_cell}</td>
+          <td>{mail_cell}</td>
+          <td>{pub}<br>{action}</td>
+          <td>{claimed} {vcard_btn}</td>
         </tr>"""
 
-    # Lead-Tabelle (neueste zuerst, max 30)
-    leads_sorted = sorted(leads, key=lambda l: l.get("discovered_at", ""), reverse=True)[:30]
+    # ── Neue Leads Tabelle (obere Liste – nur ohne Build-URL / Site) ─────────
+    new_leads = [l for l in sorted(leads, key=lambda x: x.get("discovered_at", ""), reverse=True)
+                 if not l.get("lovable_build_url") and l["id"] not in sites_by_lead][:50]
+
     lead_rows = ""
-    for l in leads_sorted:
-        has_site = l["id"] in sites_by_lead
-        if has_site:
-            site = sites_by_lead[l["id"]]
-            site_cell = f'<a href="/sites/{site["slug"]}/preview" target="_blank">👁 Preview</a>'
-            gen_btn = f'<button class="ghost" onclick="gen(\'{l["id"]}\', true)">Neu generieren</button>'
-        else:
-            build_url = l.get("lovable_build_url")
-            site_cell = (f'<a href="{_html.escape(build_url, quote=True)}" target="_blank" rel="noopener">🚀 Lovable Build öffnen</a>'
-                         if build_url else '<span style="color:#94a3b8">–</span>')
-            gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">Lovable Build-URL</button>'
-        phone = l.get("phone") or "<span style='color:#94a3b8'>–</span>"
-        rating = f'⭐ {l["rating"]} ({l.get("rating_count",0)})' if l.get("rating") else "–"
-        email_val = l.get("email") or ""
+    for l in new_leads:
+        has_website = bool(l.get("website"))
+        rating = f'⭐ {l["rating"]} ({l.get("rating_count", 0)})' if l.get("rating") else "–"
         last_out = outreach_by_lead.get(l["id"])
-        out_status = (f'<span style="color:#15803d">📧 {last_out["sent_at"][:10]}</span>'
+        out_status = (f'<span style="color:#15803d;font-size:.78rem">📧 {last_out["sent_at"][:10]}</span>'
                       if last_out and last_out.get("status") == "sent"
-                      else ('<span style="color:#b91c1c">⚠ Fehler</span>' if last_out else '<span style="color:#94a3b8">–</span>'))
-        if has_site and smtp_cfg["configured"]:
-            mail_btn = f'<button class="ghost" onclick="mail(\'{l["id"]}\', \'{email_val}\')">✉ Mail</button>'
-        elif has_site:
-            mail_btn = '<span style="color:#94a3b8;font-size:.78rem" title="SMTP konfigurieren">SMTP fehlt</span>'
-        else:
-            mail_btn = '<span style="color:#94a3b8;font-size:.78rem">erst generieren</span>'
-        lead_rows += f"""<tr>
-          <td><b>{l.get('name','')}</b><br><small style="color:#64748b">{l.get('address','') or ''}</small>{'<br><small style=\"color:#1e40af\">'+email_val+'</small>' if email_val else ''}</td>
-          <td><small>{l.get('primary_type','') or ''}</small></td>
-          <td>{phone}</td>
-          <td>{rating}</td>
-          <td>{site_cell}<br>{out_status}</td>
-          <td>{gen_btn} {mail_btn}</td>
+                      else ('<span style="color:#b91c1c;font-size:.78rem">⚠ Fehler</span>' if last_out else ""))
+        phone_cell = _wa_phone(l.get("phone"))
+        mail_cell = _mailto_link(l.get("email"), l.get("name") or "")
+        vcard_btn = f'<a href="/leads/{l["id"]}/vcard" title="Kontakt ins Adressbuch" style="text-decoration:none;font-size:1.1rem">📇</a>'
+        website_badge = (f'<span style="font-size:.72rem;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:4px">hat Website</span> '
+                         if has_website else "")
+        gen_btn = f'<button onclick="gen(\'{l["id"]}\', false)">🚀 Build-URL</button>'
+        lead_rows += f"""<tr class="lead-row" data-has-website="{str(has_website).lower()}">
+          <td>{website_badge}<b>{_html.escape(l.get('name',''))}</b><br>
+              <small style="color:#64748b">{_html.escape(l.get('address','') or '')}</small>
+              <br><small style="color:#94a3b8">{_html.escape(l.get('primary_type','') or '')}</small>
+              {out_status}</td>
+          <td>{phone_cell}</td>
+          <td>{mail_cell}</td>
+          <td style="font-size:.85rem">{rating}</td>
+          <td>{vcard_btn}</td>
+          <td>{gen_btn}</td>
         </tr>"""
 
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>LocalLift Admin</title>
-<style>body{{font:15px system-ui;max-width:1180px;margin:30px auto;padding:0 20px;color:#0f172a}}
-h1{{margin-bottom:4px}} h2{{margin-top:40px;font-size:1.2rem;color:#1e293b}}
-.stats{{display:flex;gap:20px;margin:20px 0;color:#64748b}}
-.stats div b{{display:block;font-size:1.8rem;color:#1e40af}}
-table{{width:100%;border-collapse:collapse;margin-top:12px}}
-th,td{{text-align:left;padding:10px;border-bottom:1px solid #e2e8f0;vertical-align:top;font-size:.92rem}}
-th{{background:#f8fafc;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:#64748b}}
-button{{background:#1e40af;color:#fff;border:0;padding:7px 12px;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85rem}}
-button.ghost{{background:#f1f5f9;color:#1e40af}}
-button:disabled{{opacity:.5;cursor:wait}}
-a{{color:#1e40af}}
-.warn{{background:#fef3c7;color:#92400e;padding:12px;border-radius:10px;margin:12px 0}}
-.card{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px;margin-top:14px}}
-.row{{display:flex;gap:10px;flex-wrap:wrap;align-items:end}}
-.row label{{display:flex;flex-direction:column;font-size:.78rem;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;gap:4px}}
-.row input,.row select{{padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;min-width:120px}}
-.row input.wide{{min-width:340px}}
-#status{{margin-top:10px;font-size:.9rem;color:#64748b;min-height:20px}}
-#status.err{{color:#b91c1c}} #status.ok{{color:#15803d}}
-.pill{{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#1e40af;font-size:.75rem;font-weight:600;text-decoration:none;margin-right:4px}}
-.pill:hover{{background:#e0e7ff}}
+    smtp_bar = (
+        f'<div style="background:#dcfce7;color:#166534;padding:10px 14px;border-radius:10px;margin:12px 0;font-size:.9rem">'
+        f'✉️ SMTP bereit · {smtp_cfg["host"]}:{smtp_cfg["port"]} · Absender <b>{smtp_cfg["from_email"]}</b></div>'
+        if smtp_cfg["configured"]
+        else '<div class="warn">✉️ <b>SMTP nicht konfiguriert</b> – Outreach deaktiviert. '
+             'Setze <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, <code>SMTP_PASS</code> in <code>backend/.env</code>.</div>'
+    )
+    tunnel_warn = (
+        '' if tunnels.cloudflared_available()
+        else '<div class="warn">⚠️ <b>cloudflared</b> nicht installiert – Tunnels deaktiviert. '
+             '<a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'
+    )
+
+    return HTMLResponse(f"""<!doctype html><html lang="de"><head>
+<meta charset="utf-8"><title>LocalLift Admin</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{{--pri:#1a3a6b;--pri-light:#2251a3;--acc:#e8a020;--acc-light:#f5c842;
+        --bg:#f0f4f8;--card:#fff;--border:#dde3ed;--text:#1a2437;--muted:#5a6a82}}
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}}
+  .topbar{{background:var(--pri);color:#fff;padding:0 28px;display:flex;align-items:center;gap:16px;height:60px;box-shadow:0 2px 8px #0004}}
+  .topbar img{{height:40px;object-fit:contain;border-radius:6px}}
+  .topbar h1{{font-size:1.15rem;font-weight:700;letter-spacing:.01em;color:#fff}}
+  .topbar .sub{{font-size:.78rem;color:#a8bfd8;margin-left:auto}}
+  main{{max-width:1280px;margin:28px auto;padding:0 24px}}
+  .stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:24px}}
+  .stat{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 18px;box-shadow:0 1px 3px #0001}}
+  .stat b{{display:block;font-size:2rem;font-weight:800;color:var(--pri);line-height:1}}
+  .stat span{{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}}
+  .stat.acc b{{color:var(--acc)}}
+  h2{{font-size:1.05rem;font-weight:700;color:var(--pri);margin:28px 0 10px;display:flex;align-items:center;gap:8px}}
+  table{{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px #0001;border:1px solid var(--border)}}
+  th{{background:var(--pri);color:#c8d9ef;font-size:.73rem;text-transform:uppercase;letter-spacing:.06em;padding:11px 12px;text-align:left;font-weight:600}}
+  td{{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;font-size:.88rem}}
+  tr:last-child td{{border-bottom:0}}
+  tr:hover td{{background:#f5f8fc}}
+  tr.lead-row[data-has-website="true"]{{opacity:.55}}
+  button{{background:var(--pri);color:#fff;border:0;padding:6px 12px;border-radius:8px;cursor:pointer;font-weight:600;font-size:.82rem;transition:.15s}}
+  button:hover{{background:var(--pri-light)}}
+  button.ghost{{background:#e8edf5;color:var(--pri)}}
+  button.ghost:hover{{background:#d5dff0}}
+  button.acc{{background:var(--acc);color:#fff}}
+  button:disabled{{opacity:.5;cursor:wait}}
+  a{{color:var(--pri-light)}}
+  .pill{{display:inline-block;padding:2px 8px;border-radius:999px;background:#e8edf5;color:var(--pri);font-size:.73rem;font-weight:600;text-decoration:none;margin-right:3px}}
+  .pill:hover{{background:#d5dff0}}
+  .warn{{background:#fef3c7;color:#92400e;padding:12px 16px;border-radius:10px;margin:10px 0;font-size:.9rem}}
+  .card{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:0 1px 3px #0001}}
+  .row{{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}}
+  .row label{{display:flex;flex-direction:column;font-size:.75rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;gap:4px}}
+  .row input,.row select{{padding:8px 11px;border:1px solid var(--border);border-radius:8px;font:inherit;background:#fff;min-width:110px}}
+  .row input.wide{{min-width:310px}}
+  .row label.cb{{flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500}}
+  #status{{margin-top:12px;font-size:.9rem;color:var(--muted);min-height:20px;padding:6px 0}}
+  #status.err{{color:#b91c1c}} #status.ok{{color:#15803d}}
+  .filter-bar{{display:flex;align-items:center;gap:14px;margin-bottom:8px}}
+  .filter-bar label{{font-size:.85rem;color:var(--muted);display:flex;align-items:center;gap:5px;cursor:pointer}}
+  .empty{{text-align:center;color:var(--muted);padding:32px;font-size:.9rem}}
+  @media(max-width:700px){{.stats{{grid-template-columns:repeat(2,1fr)}}}}
 </style></head><body>
-<h1>LocalLift – Admin</h1>
-<div class="stats">
-  <div><b>{len(leads)}</b>Leads</div>
-  <div><b>{len(sites)}</b>Generierte Seiten</div>
-  <div><b>{sum(1 for o in out_log if o.get('status')=='sent')}</b>E-Mails gesendet</div>
-  <div><b>{sum(1 for t in tun.values() if t['status']=='running')}</b>Aktive Tunnels</div>
-  <div><b>{len(claims)}</b>Claim-Anfragen</div>
+
+<div class="topbar">
+  <img src="http://mrermin.com/logo.png" alt="Logo" onerror="this.style.display='none'">
+  <h1>LocalLift – Admin</h1>
+  <span class="sub">v0.2 · <a href="/docs" style="color:#a8bfd8">API Docs</a> · <a href="/leads" style="color:#a8bfd8">Leads JSON</a></span>
 </div>
-{'' if tunnels.cloudflared_available() else '<div class="warn">⚠️ <b>cloudflared</b> ist nicht installiert – Tunnels deaktiviert. <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank">Installieren</a></div>'}
-{'' if smtp_cfg['configured'] else '<div class="warn">✉️ <b>SMTP nicht konfiguriert</b> – Outreach deaktiviert. Setze <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, <code>SMTP_PASS</code> (optional <code>SMTP_PORT</code>, <code>SMTP_SECURE=starttls|ssl|none</code>, <code>SMTP_FROM_NAME</code>) in <code>backend/.env</code>.</div>' if not smtp_cfg['configured'] else f'<div style="background:#dcfce7;color:#166534;padding:10px 14px;border-radius:10px;margin:12px 0;font-size:.9rem">✉️ SMTP bereit · {smtp_cfg["host"]}:{smtp_cfg["port"]} · Absender <b>{smtp_cfg["from_email"]}</b></div>'}
+
+<main>
+
+<div class="stats" style="margin-top:20px">
+  <div class="stat"><b>{n_leads}</b><span>Leads gesamt</span></div>
+  <div class="stat acc"><b>{n_build_ready}</b><span>Build-URLs bereit</span></div>
+  <div class="stat"><b>{n_sites}</b><span>Fertige Sites</span></div>
+  <div class="stat"><b>{n_sent}</b><span>E-Mails gesendet</span></div>
+  <div class="stat"><b>{n_tunnels}</b><span>Aktive Tunnels</span></div>
+  <div class="stat"><b>{n_claims}</b><span>Claim-Anfragen</span></div>
+</div>
+
+{tunnel_warn}
+{smtp_bar}
 
 <h2>🔎 Scraper – Leads finden</h2>
 <div class="card">
   <div class="row">
-    <label>Suchbegriff<input id="q" class="wide" placeholder="z.B. Friseur in Berlin Mitte" value=""></label>
-    <label>Sprache (Quelle)
+    <label>Suchbegriff<input id="q" class="wide" placeholder="z.B. Friseur in Berlin Mitte"></label>
+    <label>Sprache
       <select id="lang">
-        <option value="auto">🌐 Auto (aus Region)</option>
+        <option value="auto">🌐 Auto</option>
         <option value="de">Deutsch</option>
         <option value="en">English</option>
         <option value="id">Bahasa Indonesia</option>
@@ -677,35 +837,59 @@ a{{color:#1e40af}}
         <option value="US">US</option>
       </select>
     </label>
-    <label>Seiten<input id="pages" type="number" min="1" max="5" value="2" style="min-width:70px"></label>
-    <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
-      <input id="noweb" type="checkbox" checked style="min-width:auto"> nur ohne Website
-    </label>
-    <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:.9rem;font-weight:500">
-      <input id="autoTr" type="checkbox" disabled style="min-width:auto"> Übersetzen erst nach Import/Preview
-    </label>
+    <label>Seiten<input id="pages" type="number" min="1" max="5" value="2" style="min-width:65px"></label>
+    <label class="cb"><input id="noweb" type="checkbox" checked> nur ohne Website</label>
     <button id="runBtn" onclick="runScraper()">Scrapen</button>
-    <button class="ghost" onclick="batchGen()">Batch: 5 Build-URLs</button>
+    <button class="acc" onclick="batchGen()" title="Erzeugt Build-URLs für die nächsten 5 Leads und öffnet ALLE in Lovable">🚀 Batch: 5 Build-URLs</button>
     <button class="ghost" onclick="batchMail()">📧 Batch-Outreach (10)</button>
   </div>
   <div id="status"></div>
 </div>
 
-<h2>📋 Letzte Leads ({len(leads_sorted)} von {len(leads)})</h2>
-<table><thead><tr><th>Unternehmen</th><th>Branche</th><th>Telefon</th><th>Bewertung</th><th>Site</th><th>Aktion</th></tr></thead>
-<tbody>{lead_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Leads. Scraper oben starten.</td></tr>'}</tbody></table>
+<h2>📋 Neue Leads <small style="font-size:.8rem;font-weight:400;color:var(--muted)">({len(new_leads)} von {n_leads} – ohne generierte)</small>
+  <span style="margin-left:auto;font-size:.82rem;font-weight:400">
+    <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;color:var(--muted)">
+      <input type="checkbox" id="hideWebsite" onchange="filterLeads()" checked> Leads mit Website ausblenden
+    </label>
+  </span>
+</h2>
+<table id="leadsTable">
+  <thead><tr>
+    <th>Unternehmen</th><th>Telefon (WhatsApp)</th><th>E-Mail</th>
+    <th>Bewertung</th><th>📇</th><th>Aktion</th>
+  </tr></thead>
+  <tbody>{lead_rows or '<tr><td colspan=6 class="empty">Noch keine neuen Leads. Scraper oben starten.</td></tr>'}</tbody>
+</table>
 
-<h2>🌐 Generierte Sites</h2>
-<table><thead><tr><th>Site</th><th>Theme</th><th>Sprachen</th><th>Claim</th><th>Public URL</th><th>Aktion</th></tr></thead>
-<tbody>{site_rows or '<tr><td colspan=6 style="text-align:center;color:#94a3b8;padding:30px">Noch keine Seiten generiert.</td></tr>'}</tbody></table>
+<h2>🚀 Generierte & Build-bereit
+  <small style="font-size:.8rem;font-weight:400;color:var(--muted)">({len(build_ready_leads) + n_sites} Einträge)</small>
+</h2>
+<table>
+  <thead><tr>
+    <th>Unternehmen / Site</th><th>Theme / Sprachen</th><th>Telefon (WhatsApp)</th>
+    <th>E-Mail</th><th>URL / Tunnel</th><th>Claim / Kontakt</th>
+  </tr></thead>
+  <tbody>{gen_rows or '<tr><td colspan=6 class="empty">Noch keine generierten Seiten. Oben einen Lead auswählen und Build-URL erzeugen.</td></tr>'}</tbody>
+</table>
 
-<p style="margin-top:30px;color:#64748b;font-size:.9rem">
-  <a href="/docs">→ API Docs</a> · <a href="/themes">→ Themes JSON</a> · <a href="/leads">→ Leads JSON</a> · <a href="/claims">→ Claims JSON</a>
+<p style="margin-top:28px;color:var(--muted);font-size:.82rem">
+  <a href="/docs">API Docs</a> · <a href="/themes">Themes</a> · <a href="/leads">Leads JSON</a> · <a href="/claims">Claims JSON</a>
 </p>
+</main>
 
 <script>
 const s = document.getElementById('status');
 function setStatus(msg, cls){{ s.className = cls||''; s.textContent = msg; }}
+
+function filterLeads(){{
+  const hide = document.getElementById('hideWebsite').checked;
+  document.querySelectorAll('#leadsTable .lead-row').forEach(tr => {{
+    if(hide && tr.dataset.hasWebsite === 'true') tr.style.display = 'none';
+    else tr.style.display = '';
+  }});
+}}
+// Run on load
+filterLeads();
 
 async function runScraper(){{
   const q = document.getElementById('q').value.trim();
@@ -725,13 +909,13 @@ async function runScraper(){{
     const j = await r.json();
     if(!r.ok) throw new Error(j.detail || 'Fehler');
     setStatus(`✅ ${{j.total_found}} gefunden · ${{j.leads_without_website}} ohne Website hinzugefügt`, 'ok');
-    setTimeout(()=>location.reload(), 1200);
+    setTimeout(()=>location.reload(), 1400);
   }} catch(e){{ setStatus('❌ '+e.message, 'err'); btn.disabled = false; }}
 }}
 
 async function gen(leadId, force){{
   const lang = document.getElementById('lang').value;
-  setStatus('Erzeuge Lovable Build-URL ('+lang+')…');
+  setStatus('Erzeuge Lovable Build-URL…');
   const r = await fetch(`/sites/generate/${{leadId}}?force=${{force}}&language=${{lang}}`, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
@@ -741,19 +925,21 @@ async function gen(leadId, force){{
   }} else {{
     setStatus('✅ Bereits vorhanden.', 'ok');
   }}
-  setTimeout(()=>location.reload(), 1000);
+  setTimeout(()=>location.reload(), 1200);
 }}
 
 async function batchGen(){{
   const lang = document.getElementById('lang').value;
-  setStatus('Erzeuge Batch Build-URLs…');
+  setStatus('Erzeuge 5 Batch Build-URLs – alle werden in Lovable geöffnet…');
   const r = await fetch('/sites/generate-batch?limit=5&language='+lang, {{method:'POST'}});
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
-  const ok = j.results.filter(x=>x.build_url).length;
-  if(ok && j.results[0].build_url) window.open(j.results[0].build_url, '_blank', 'noopener');
-  setStatus(`✅ ${{ok}}/${{j.processed}} Lovable Build-URLs bereit`, 'ok');
-  setTimeout(()=>location.reload(), 1200);
+  const ok = j.results.filter(x => x.build_url);
+  if(ok.length === 0){{ setStatus('ℹ️ Keine neuen Leads ohne Build-URL gefunden.', 'ok'); setTimeout(()=>location.reload(), 1500); return; }}
+  // Open ALL generated URLs (small delay to avoid popup blockers)
+  ok.forEach((x, i) => setTimeout(() => window.open(x.build_url, '_blank', 'noopener'), i * 300));
+  setStatus(`✅ ${{ok.length}}/${{j.processed}} Lovable-Tabs geöffnet`, 'ok');
+  setTimeout(()=>location.reload(), 1500);
 }}
 
 async function translate(slug, langs){{
@@ -762,22 +948,15 @@ async function translate(slug, langs){{
   const j = await r.json();
   if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
   setStatus('✅ Übersetzt: '+(j.added||[]).join(', '), 'ok');
-  setTimeout(()=>location.reload(), 800);
+  setTimeout(()=>location.reload(), 900);
 }}
 
-async function start(slug){{ const r=await fetch('/tunnels/start/'+slug,{{method:'POST'}}); if(!r.ok){{setStatus('❌ '+(await r.json()).detail,'err')}} else location.reload(); }}
-async function stop(slug){{ await fetch('/tunnels/stop/'+slug,{{method:'POST'}}); location.reload(); }}
-
-async function mail(leadId, prefill){{
-  const to = prompt('Empfänger-E-Mail:', prefill || '');
-  if(!to) return;
-  setStatus('Sende E-Mail an '+to+'…');
-  const r = await fetch('/outreach/send/'+leadId, {{method:'POST', headers:{{'Content-Type':'application/json'}},
-    body: JSON.stringify({{to: to}})}});
-  const j = await r.json();
-  if(!r.ok){{ setStatus('❌ '+(j.detail||'Fehler'), 'err'); return; }}
-  setStatus('✅ Gesendet an '+j.outreach.to, 'ok');
-  setTimeout(()=>location.reload(), 1000);
+async function start(slug){{
+  const r = await fetch('/tunnels/start/'+slug, {{method:'POST'}});
+  if(!r.ok){{ setStatus('❌ '+(await r.json()).detail, 'err'); }} else location.reload();
+}}
+async function stop(slug){{
+  await fetch('/tunnels/stop/'+slug, {{method:'POST'}}); location.reload();
 }}
 
 async function batchMail(){{
@@ -785,10 +964,13 @@ async function batchMail(){{
   setStatus('Batch-Outreach läuft…');
   const r = await fetch('/outreach/send-batch?limit=10', {{method:'POST'}});
   const j = await r.json();
-  if(!r.ok){{ setStatus('❌ Fehler', 'err'); return; }}
-  const ok = j.results.filter(x=>x.status==='ok').length;
-  setStatus(`✅ ${{ok}}/${{j.processed}} E-Mails gesendet`, 'ok');
-  setTimeout(()=>location.reload(), 1200);
+  if(!r.ok){{ setStatus('❌ Fehler beim Outreach', 'err'); return; }}
+  const ok = j.results.filter(x => x.status === 'ok').length;
+  if(j.processed === 0)
+    setStatus('ℹ️ Keine geeigneten Leads: Es werden Leads mit fertig generierter Site + E-Mail-Adresse benötigt.', '');
+  else
+    setStatus(`✅ ${{ok}}/${{j.processed}} E-Mails gesendet`, 'ok');
+  setTimeout(()=>location.reload(), 1400);
 }}
 </script>
 </body></html>""")
